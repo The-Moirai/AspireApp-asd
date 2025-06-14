@@ -1,0 +1,203 @@
+﻿@page "/drone_map"
+@rendermode InteractiveAuto
+@using ClassLibrary_Core.Drone
+@using Microsoft.AspNetCore.SignalR.Client
+@inject NavigationManager Navigation
+<h3>Drone_Map</h3>
+@if (drones == null)
+{
+    <p>正在加载任务数据...</p>
+}
+else
+{
+<div class="drone-map-container">
+    <div class="map-viewport"
+         style="width:1200px;height:800px;border:1px solid #ccc;position:relative;">
+        <svg width="1200" height="800">
+                @foreach (var drone in drones.Where(d => !showOnlyConnected || visibleDroneIds.Contains(d.Id)))
+                {
+                    var current = drone;
+                    @foreach (var adjId in current.ConnectedDroneIds)
+                    {
+                        var adjacent = drones.FirstOrDefault(d => d.Id == adjId);
+                        @if (adjacent?.CurrentPosition != null)
+                        {
+                            <line x1="@current.CurrentPosition.Latitude_x" y1="@current.CurrentPosition.Longitude_y"
+                                  x2="@adjacent.CurrentPosition.Latitude_x" y2="@adjacent.CurrentPosition.Longitude_y"
+                                  stroke="orange" stroke-width="2" />
+                        }
+                    }
+                }
+        }
+        @foreach (var drone in drones.Where(d => !showOnlyConnected || visibleDroneIds.Contains(d.Id)))
+        {
+            if (drone.CurrentPosition != null)
+            {
+                var img = GetDroneImage(drone.ModelStatus);
+                var color = GetStatusColor(drone.Status);
+                <image href="@img"
+                       x="@(drone.CurrentPosition.Latitude_x - 16)"
+                       y="@(drone.CurrentPosition.Longitude_y - 16)"
+                       width="32" height="32"
+                               style="stroke:@color;stroke-width:@(drone.Id == SelectedDrone?.Id ? "4" : "2");
+                          opacity:@(drone.Id == SelectedDrone?.Id ? "1" : "0.8")" />
+                <circle cx="@drone.CurrentPosition.Latitude_x"
+                        cy="@drone.CurrentPosition.Longitude_y"
+                        r="18"
+                        fill="none"
+                        stroke="@color"
+                        stroke-width="3" />
+                <label x="@(drone.CurrentPosition.Latitude_x + 15)"
+                      y="@(drone.CurrentPosition.Longitude_y + 5)"
+                      font-size="14"
+                      fill="black">
+                    @drone.Name
+                </label>
+            }
+        }
+        </svg>
+    </div>
+    <!-- 控制面板 (20%宽度) -->
+    <div class="control-panel">
+        <h3>无人机控制</h3>    
+        <select class="drone-selector" @bind="selectedDroneId">
+            <option value="">-- 选择无人机 --</option>
+            @foreach(var drone in drones)          
+            {
+               <option value="@drone.Id">@drone.Name </option>
+            }
+        </select>
+    
+         <div class="button-group">
+            <button class="control-btn" @onclick="StopDrone">停止</button>
+            <button class="control-btn" @onclick="ToggleShowConnected">
+                @(showOnlyConnected ? "显示全部" : "仅显示连接")
+            </button>
+        </div>
+
+        <div class="status-display">
+            <h4>状态信息</h4>
+            <p>当前选择: @(SelectedDrone?.Name ?? "无")</p>
+            <p>X坐标: @(SelectedDrone?.CurrentPosition.Latitude_x ?? 0)</p>
+            <p>Y坐标: @(SelectedDrone?.CurrentPosition.Longitude_y ?? 0)</p>
+        </div>
+     </div>
+</div>
+}
+@code { 
+    private HubConnection? hubConnection;
+    private List<Drone> drones = new();
+    private string? selectedDroneId;
+    private Drone? SelectedDrone => !string.IsNullOrEmpty(selectedDroneId) && int.TryParse(selectedDroneId, out var id)
+        ? drones.FirstOrDefault(d => d.Id == id)
+        : null;
+    private bool showOnlyConnected = false;
+    private HashSet<int> visibleDroneIds = new();
+
+    private void ToggleShowConnected()
+    {
+        showOnlyConnected = !showOnlyConnected; 
+        UpdateVisibleDrones();
+    }
+
+    private void UpdateVisibleDrones()
+    {
+        visibleDroneIds.Clear();
+
+        if (showOnlyConnected && SelectedDrone != null)
+        {
+            // 添加选中无人机
+            visibleDroneIds.Add(SelectedDrone.Id);
+
+            // 添加直接连接的无人机
+            foreach (var adjId in SelectedDrone.ConnectedDroneIds)
+            {
+                visibleDroneIds.Add(adjId);
+
+                // 获取下一层邻接无人机
+                var adjacentDrone = drones.FirstOrDefault(d => d.Id == adjId);
+                if (adjacentDrone != null)
+                {
+                    foreach (var secondLevelId in adjacentDrone.ConnectedDroneIds)
+                    {
+                        visibleDroneIds.Add(secondLevelId);
+                    }
+                }
+            }
+        }
+
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// 实时获取无人机信息
+    /// </summary>
+    /// <returns></returns>
+    protected override async Task OnInitializedAsync()
+    {
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl(Navigation.ToAbsoluteUri("/dronehub"))
+            .Build();
+
+        hubConnection.On<List<Drone>>("ReceiveDronesPosition", ds =>
+        {
+            drones = ds;
+            InvokeAsync(StateHasChanged);
+        });
+        await hubConnection.StartAsync();
+    }
+    /// <summary>
+    /// 状态颜色映射
+    /// </summary>
+    /// <param name="status"></param>
+    /// <returns></returns>
+    private string GetStatusColor(DroneStatus status) => status switch
+    {
+        DroneStatus.Idle => "gray",
+        DroneStatus.InMission => "green",
+        DroneStatus.Returning => "blue",
+        DroneStatus.Maintenance => "orange",
+        DroneStatus.Offline => "black",
+        DroneStatus.Emergency => "red",
+        _ => "gray"
+    };
+    /// <summary>
+    /// 类型图片映射
+    /// </summary>
+    /// <param name="type"></param>
+    /// <returns></returns>
+    private string GetDroneImage(ModelStatus? type) => type switch
+    {
+        ModelStatus.True => "images/PhysicalDrone.png",
+        ModelStatus.Vm => "images/virtualdrone.png",
+    };
+
+    public bool IsConnected =>
+        hubConnection?.State == HubConnectionState.Connected;
+
+    /// <summary>
+    /// 设置无人机为离线状态
+    /// </summary>
+    /// <param name="droneId"></param>
+    public void StopDrone()
+    {
+        if (SelectedDrone != null && hubConnection is not null && hubConnection.State == HubConnectionState.Connected)
+        {
+            hubConnection.InvokeAsync("SetDroneOffline", SelectedDrone.Id);
+        }
+    }
+
+    /// <summary>
+    /// 结束连接
+    /// </summary>
+    /// <returns></returns>
+    public async ValueTask DisposeAsync()
+    {
+        if (hubConnection is not null)
+        {
+            await hubConnection.DisposeAsync();
+        }
+    }
+
+}
+

@@ -1,0 +1,173 @@
+﻿@page "/task_manage"
+@rendermode InteractiveAuto
+@using ClassLibrary_Core.Mission
+@using Microsoft.AspNetCore.SignalR.Client
+@inject HttpClient Http
+@inject NavigationManager Navigation
+<h3>任务管理</h3>
+
+@if (tasks == null)
+{
+    <p>正在加载任务数据...</p>
+}
+else
+{
+    <table class="table table-bordered">
+        <thead>
+            <tr>
+                <th>任务ID</th>
+                <th>描述</th>
+                <th>状态</th>
+                <th>创建时间</th>
+                <th>子任务数</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var task in tasks)
+            {
+                <tr>
+                    <td>@task.Id</td>
+                    <td>@task.Description</td>
+                    <td>@task.Status</td>
+                    <td>@task.CreationTime.ToString("yyyy-MM-dd HH:mm")</td>
+                    <td>@task.SubTasks?.Count ?? 0</td>
+                    <td>
+                        <button class="btn btn-link" @onclick="() => ToggleSubTasks(task.Id)">
+                            @(expandedTaskId == task.Id ? "收起" : "查看子任务")
+                        </button>
+                    </td>
+                </tr>
+                @if (expandedTaskId == task.Id && task.SubTasks != null)
+                {
+                    <tr>
+                        <td colspan="6">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>子任务ID</th>
+                                        <th>描述</th>
+                                        <th>状态</th>
+                                        <th>分配无人机</th>
+                                        <th>分配时间</th>
+                                        <th>完成时间</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var sub in task.SubTasks)
+                                    {
+                                        <tr>
+                                            <td>@sub.Id</td>
+                                            <td>@sub.Description</td>
+                                            <td>@sub.Status</td>
+                                            <td>@sub.AssignedDrone</td>
+                                            <td>@(sub.AssignedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
+                                            <td>@(sub.CompletedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+    <button class="btn btn-primary mb-2" @onclick="ShowAddTaskForm">添加任务</button>
+
+    @if (showAddForm)
+    {
+        <EditForm Model="newTask" OnValidSubmit="AddTaskAsync" @rendermode="InteractiveServer">
+            <DataAnnotationsValidator />
+            <InputFile OnChange="OnVideoSelected" accept=".json" />
+            <div class="mb-2">
+                <label>描述：</label>
+                <InputText @bind-Value="newTask.Description" class="form-control" />
+            </div>
+            <button type="submit" class="btn btn-success">保存</button>
+            <button type="button" class="btn btn-secondary" @onclick="HideAddTaskForm">取消</button>
+        </EditForm>
+    }
+}
+
+
+@code {
+    private Guid? expandedTaskId;
+    private List<MainTask>? tasks;
+    private HubConnection? hubConnection;
+    private bool showAddForm = false;
+    private MainTask newTask = new MainTask { Id = Guid.NewGuid(), CreationTime = DateTime.Now, SubTasks = new List<SubTask>() };
+    private IBrowserFile? selectedVideoFile;
+
+    /// <summary>
+    /// 实时获取任务信息
+    /// </summary>
+    /// <returns></returns>
+    protected override async Task OnInitializedAsync()
+    {
+        tasks = new List<MainTask>();
+
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl(Navigation.ToAbsoluteUri("/taskshub"))
+            .Build();
+
+        hubConnection.On<List<MainTask>>("ReceiveDronesPosition", ts =>
+        {
+            tasks = ts;
+            InvokeAsync(StateHasChanged);
+        });
+        await hubConnection.StartAsync();
+    }
+    private void ToggleSubTasks(Guid taskId)
+    {
+        if (expandedTaskId == taskId)
+            expandedTaskId = null;
+        else
+            expandedTaskId = taskId;
+    }
+    private void ShowAddTaskForm()
+    {
+        newTask = new MainTask { Id = Guid.NewGuid(), CreationTime = DateTime.Now, SubTasks = new List<SubTask>() };
+        showAddForm = true;
+    }
+
+    private void HideAddTaskForm()
+    {
+        showAddForm = false;
+    }
+
+    private async Task AddTaskAsync()
+    {
+        if (selectedVideoFile == null)
+            return;
+
+        var content = new MultipartFormDataContent();
+
+        // 添加任务信息（只传递描述等必要字段）
+        content.Add(new StringContent(newTask.Description ?? ""), "Description");
+        content.Add(new StringContent(newTask.Id.ToString()), "Id");
+        content.Add(new StringContent(newTask.CreationTime.ToString("o")), "CreationTime");
+        var stream = selectedVideoFile.OpenReadStream(maxAllowedSize: 1024 * 1024 * 500); // 500MB上限
+        content.Add(new StreamContent(stream), "VideoFile", selectedVideoFile.Name);
+
+        var response = await Http.PostAsync("api/tasks/upload", content);   
+        if (response.IsSuccessStatusCode)
+        {
+            tasks = await Http.GetFromJsonAsync<List<MainTask>>("api/tasks");
+            showAddForm = false;
+            selectedVideoFile = null;
+        }
+        // 可加错误处理
+    }
+    private async Task OnVideoSelected(InputFileChangeEventArgs e)
+    {
+        selectedVideoFile = e.File;
+        if (selectedVideoFile != null)
+        {
+            // 自动用文件名（去除扩展名）作为任务描述
+            var fileName = Path.GetFileNameWithoutExtension(selectedVideoFile.Name);
+            newTask.Description = fileName;
+            StateHasChanged();
+        }
+    }
+}
