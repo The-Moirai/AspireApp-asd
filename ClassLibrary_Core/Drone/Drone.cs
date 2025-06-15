@@ -12,6 +12,9 @@ namespace ClassLibrary_Core.Drone
         /// 无人机的名称
         /// </summary>
         public string Name { get; set; }
+        /// <summary>
+        /// 无人机类型
+        /// </summary>
         public ModelStatus ModelStatus { get; set; }
         /// <summary>
         /// 无人机的位置

@@ -1,0 +1,62 @@
+﻿@page "/history-analysis"
+@using System.Globalization
+@inject HttpClient Http
+@inject IJSRuntime JSRuntime
+
+<h3>无人机与任务历史数据分析</h3>
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-md-12">
+            <ul class="nav nav-tabs">
+                <li class="nav-item">
+                    <a class="nav-link @(activeTab=="drone"?"active":"")" @onclick="()=>activeTab='drone'">无人机数据</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link @(activeTab=="task"?"active":"")" @onclick="()=>activeTab='task'">任务数据</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link @(activeTab=="time"?"active":"")" @onclick="()=>activeTab='time'">时间范围分析</a>
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    @if (activeTab == "drone")
+    {
+        <DroneDataAnalysis 
+            OnDataLoaded="LoadDroneData"
+            OnChartRendered="RenderDroneChart" />
+    }
+    else if (activeTab == "task")
+    {
+        <TaskDataAnalysis 
+            OnDataLoaded="LoadTaskData"
+            OnChartRendered="RenderTaskChart" />
+    }
+    else if (activeTab == "time")
+    {
+        <TimeRangeAnalysis 
+            OnDataLoaded="LoadTimeRangeData"
+            OnChartRendered="RenderTimeRangeChart" />
+    }
+</div>
+
+@code {
+    private string activeTab = "drone";
+    
+    private async Task LoadDroneData(DroneDataRequest request)
+    {
+        // 调用API获取无人机数据
+        // 实现根据请求参数调用不同API端点
+    }
+    
+    private async Task RenderDroneChart(DroneDataResponse data)
+    {
+        // 使用Chart.js渲染图表
+        await JSRuntime.InvokeVoidAsync("renderDroneChart", data);
+    }
+    
+    // 其他数据处理方法...
+}
+

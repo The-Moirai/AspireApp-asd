@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <Sdk Name="Aspire.AppHost.Sdk" Version="9.0.0" />
 
@@ -14,11 +14,13 @@
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.AppHost" Version="9.3.1" />
     <PackageReference Include="Aspire.Hosting.Redis" Version="9.3.1" />
+    <PackageReference Include="Aspire.Hosting.SqlServer" Version="9.3.1" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\BlazorApp_Web\BlazorApp_Web\BlazorApp_Web.csproj" />
     <ProjectReference Include="..\WebApplication_Drone\WebApplication_Drone.csproj" />
+    <ProjectReference Include="..\WebApplication.Data\WebApplication.Data.csproj" />
   </ItemGroup>
 
 </Project>
