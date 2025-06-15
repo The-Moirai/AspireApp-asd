@@ -29,8 +29,12 @@ builder.Services.AddSwaggerGen(c =>
         Format = "binary"
     });
 });
+//Api测试时需将socket服务及socket连接服务器的后台服务注释掉
+//socket连接服务器
 builder.Services.AddSingleton<SocketService>();
+//socket连接服务器的后台服务
 builder.Services.AddHostedService<SocketBackgroundService>();
+// 添加数据服务
 builder.Services.AddSingleton<DroneDataService>();
 builder.Services.AddSingleton<TaskDataService>();
 var app = builder.Build();

@@ -11,7 +11,7 @@ namespace WebApplication_Drone.Controllers
     {
         private readonly DroneDataService _droneDataService;
 
-        public DronesController(DroneDataService droneDataService, SocketService socketService)
+        public DronesController(DroneDataService droneDataService)
         {
             _droneDataService = droneDataService;
         }
