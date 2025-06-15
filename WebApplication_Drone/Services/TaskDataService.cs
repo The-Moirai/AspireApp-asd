@@ -96,7 +96,7 @@ namespace WebApplication_Drone.Services
             {
                 if (!_tasks.Any(t => t.Id == task.Id))
                     _tasks.Add(task);
-
+                OnDroneChanged("add",task);
             }
         }
         /// <summary>

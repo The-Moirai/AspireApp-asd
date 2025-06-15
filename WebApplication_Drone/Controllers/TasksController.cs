@@ -35,6 +35,12 @@ namespace WebApplication_Drone.Controllers
         [HttpPost("upload")]
         public async Task<IActionResult> UploadTaskWithVideo([FromForm] string Description, [FromForm] Guid Id, [FromForm] DateTime CreationTime, [FromForm] IFormFile VideoFile)
         {
+            var videosDir = Path.Combine(Directory.GetCurrentDirectory(), "TaskVideos");
+            if (!Directory.Exists(videosDir))
+            {
+                Directory.CreateDirectory(videosDir);
+            }
+
             // 保存视频文件
             var savePath = Path.Combine("TaskVideos", VideoFile.FileName);
             using (var stream = System.IO.File.Create(savePath))
