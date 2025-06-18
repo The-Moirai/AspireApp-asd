@@ -17,16 +17,21 @@ builder.Services.AddRazorComponents()
     .AddInteractiveWebAssemblyComponents();
 
 ///<summary>
-///·şÎñÆ÷Êı¾İ²Ù×÷·şÎñ
+///é”Ÿæ–¤æ‹·é”Ÿæ–¤æ‹·é”Ÿæ–¤æ‹·é”Ÿæ–¤æ‹·é”Ÿæ·è¯§æ‹·é”Ÿæ–¤æ‹·é”Ÿæ–¤æ‹·é”Ÿæ–¤æ‹·
 ///</summary>
 builder.Services.AddHttpClient("ApiService", client =>
 {
-    client.BaseAddress = new Uri("https://apisercie-drone/"); // Aspire ·şÎñÃû»òÊµ¼ÊAPIµØÖ·
+    client.BaseAddress = new Uri("https://apisercie-drone/"); // Aspire é”Ÿæ–¤æ‹·é”Ÿæ–¤æ‹·é”Ÿæ–¤æ‹·é”Ÿæ–¤æ‹·å®é”Ÿæ–¤æ‹·APIé”Ÿæ–¤æ‹·å€
 });
-// Ìí¼ÓÊı¾İ·şÎñ
+
+
+//é”Ÿæ–¤æ‹·é”Ÿæ·è®¹æ‹·æ—¶é”Ÿæ–¤æ‹·é”Ÿé…µå‡¤æ‹·é”Ÿæ–¤æ‹·
+// æ·»åŠ æ•°æ®æœåŠ¡
 builder.Services.AddScoped<HistoryApiService>();
-//Êı¾İ¶¨Ê±ÍÆËÍ·şÎñ
+//æ•°æ®å®šæ—¶æ¨é€æœåŠ¡
+
 builder.Services.AddHostedService<DronePushBackgroundService>();
+builder.Services.AddHostedService<TaskPushBackgroundService>();
 var app = builder.Build();
 
 app.MapDefaultEndpoints();
@@ -47,13 +52,13 @@ app.UseHttpsRedirection();
 
 app.UseStaticFiles();
 app.UseAntiforgery();
-app.MapStaticAssets();  // Ó³ÉäWebAssembly¾²Ì¬×ÊÔ´
+app.MapStaticAssets();  // æ˜ é”Ÿæ–¤æ‹·WebAssemblyé”Ÿæ–¤æ‹·æ€é”Ÿæ–¤æ‹·æº
 app.MapHub<DroneHub>("/droneHub");
 app.MapHub<TaskHub>("/taskshub");
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode()
     .AddInteractiveWebAssemblyRenderMode()
-    .AddAdditionalAssemblies(typeof(BlazorApp_Web.Client._Imports).Assembly);
+    .AddAdditionalAssemblies(typeof(Counter).Assembly);
 
 app.Run();

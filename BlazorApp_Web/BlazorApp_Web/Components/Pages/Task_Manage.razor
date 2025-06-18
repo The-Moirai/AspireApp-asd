@@ -1,10 +1,15 @@
 ﻿@page "/task_manage"
-@rendermode InteractiveAuto
+@rendermode InteractiveServer
 @using ClassLibrary_Core.Mission
 @using Microsoft.AspNetCore.SignalR.Client
-@inject HttpClient Http
+@inject IHttpClientFactory HttpClientFactory
 @inject NavigationManager Navigation
+@implements IAsyncDisposable
 <h3>任务管理</h3>
+
+<div class="connection-status">
+    <p>连接状态: @(IsConnected ? "已连接" : "未连接")</p>
+</div>
 
 @if (tasks == null)
 {
@@ -26,12 +31,13 @@ else
         <tbody>
             @foreach (var task in tasks)
             {
+                var activeSubTaskCount = GetActiveSubTaskCount(task);
                 <tr>
                     <td>@task.Id</td>
                     <td>@task.Description</td>
                     <td>@task.Status</td>
                     <td>@task.CreationTime.ToString("yyyy-MM-dd HH:mm")</td>
-                    <td>@task.SubTasks?.Count ?? 0</td>
+                    <td>@activeSubTaskCount</td>
                     <td>
                         <button class="btn btn-link" @onclick="() => ToggleSubTasks(task.Id)">
                             @(expandedTaskId == task.Id ? "收起" : "查看子任务")
@@ -40,6 +46,7 @@ else
                 </tr>
                 @if (expandedTaskId == task.Id && task.SubTasks != null)
                 {
+                    var activeSubTasks = GetActiveSubTasks(task);
                     <tr>
                         <td colspan="6">
                             <table class="table table-sm">
@@ -54,7 +61,7 @@ else
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    @foreach (var sub in task.SubTasks)
+                                    @foreach (var sub in activeSubTasks)
                                     {
                                         <tr>
                                             <td>@sub.Id</td>
@@ -79,7 +86,7 @@ else
     {
         <EditForm Model="newTask" OnValidSubmit="AddTaskAsync" @rendermode="InteractiveServer">
             <DataAnnotationsValidator />
-            <InputFile OnChange="OnVideoSelected" accept=".json" />
+            <InputFile OnChange="OnVideoSelected" accept=".mp4" />
             <div class="mb-2">
                 <label>描述：</label>
                 <InputText @bind-Value="newTask.Description" class="form-control" />
@@ -94,6 +101,9 @@ else
 @code {
     private Guid? expandedTaskId;
     private List<MainTask>? tasks;
+    private List<MainTask>? lastTasks; // 用于检测数据变更
+    private Dictionary<Guid, int> subTaskCountCache = new(); // 缓存子任务计数
+    private Dictionary<Guid, List<SubTask>> activeSubTaskCache = new(); // 缓存活跃子任务
     private HubConnection? hubConnection;
     private bool showAddForm = false;
     private MainTask newTask = new MainTask { Id = Guid.NewGuid(), CreationTime = DateTime.Now, SubTasks = new List<SubTask>() };
@@ -111,13 +121,67 @@ else
             .WithUrl(Navigation.ToAbsoluteUri("/taskshub"))
             .Build();
 
-        hubConnection.On<List<MainTask>>("ReceiveDronesPosition", ts =>
+        hubConnection.On<List<MainTask>>("ReceiveTaskPosition", ts =>
         {
-            tasks = ts;
-            InvokeAsync(StateHasChanged);
+            // 只有数据真正变更时才更新UI
+            if (!TasksEqual(tasks, ts))
+            {
+                tasks = ts;
+                InvalidateCache(); // 清除缓存
+                InvokeAsync(StateHasChanged);
+            }
         });
         await hubConnection.StartAsync();
     }
+
+    /// <summary>
+    /// 检测任务列表是否相等（简单版本）
+    /// </summary>
+    private bool TasksEqual(List<MainTask>? list1, List<MainTask>? list2)
+    {
+        if (list1 == null && list2 == null) return true;
+        if (list1 == null || list2 == null) return false;
+        if (list1.Count != list2.Count) return false;
+        
+        // 简单的哈希比较，可以根据需要优化
+        return list1.GetHashCode() == list2.GetHashCode();
+    }
+
+    /// <summary>
+    /// 清除缓存
+    /// </summary>
+    private void InvalidateCache()
+    {
+        subTaskCountCache.Clear();
+        activeSubTaskCache.Clear();
+    }
+
+    /// <summary>
+    /// 获取活跃子任务数量（带缓存）
+    /// </summary>
+    private int GetActiveSubTaskCount(MainTask task)
+    {
+        if (subTaskCountCache.TryGetValue(task.Id, out var count))
+            return count;
+
+        count = task.SubTasks?.Where(st => st.Status != TaskStatus.WaitingForActivation).Count() ?? 0;
+        subTaskCountCache[task.Id] = count;
+        return count;
+    }
+
+    /// <summary>
+    /// 获取活跃子任务列表（带缓存）
+    /// </summary>
+    private List<SubTask> GetActiveSubTasks(MainTask task)
+    {
+        if (activeSubTaskCache.TryGetValue(task.Id, out var subTasks))
+            return subTasks;
+
+        subTasks = task.SubTasks?.Where(st => st.Status != TaskStatus.WaitingForActivation).ToList() ?? new List<SubTask>();
+        activeSubTaskCache[task.Id] = subTasks;
+        return subTasks;
+    }
+
     private void ToggleSubTasks(Guid taskId)
     {
         if (expandedTaskId == taskId)
@@ -150,10 +214,11 @@ else
         var stream = selectedVideoFile.OpenReadStream(maxAllowedSize: 1024 * 1024 * 500); // 500MB上限
         content.Add(new StreamContent(stream), "VideoFile", selectedVideoFile.Name);
 
-        var response = await Http.PostAsync("api/tasks/upload", content);   
+        var client = HttpClientFactory.CreateClient("ApiService");
+        var response = await client.PostAsync("api/tasks/upload", content);
         if (response.IsSuccessStatusCode)
         {
-            tasks = await Http.GetFromJsonAsync<List<MainTask>>("api/tasks");
+            tasks = await client.GetFromJsonAsync<List<MainTask>>("api/tasks");
             showAddForm = false;
             selectedVideoFile = null;
         }
@@ -165,9 +230,27 @@ else
         if (selectedVideoFile != null)
         {
             // 自动用文件名（去除扩展名）作为任务描述
-            var fileName = Path.GetFileNameWithoutExtension(selectedVideoFile.Name);
+            var fileName = Path.GetFileName(selectedVideoFile.Name);
             newTask.Description = fileName;
             StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// 检查SignalR连接状态
+    /// </summary>
+    public bool IsConnected =>
+        hubConnection?.State == HubConnectionState.Connected;
+
+    /// <summary>
+    /// 结束连接
+    /// </summary>
+    /// <returns></returns>
+    public async ValueTask DisposeAsync()
+    {
+        if (hubConnection is not null)
+        {
+            await hubConnection.DisposeAsync();
         }
     }
 }
