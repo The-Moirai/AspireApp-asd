@@ -1,6 +1,9 @@
-﻿using ClassLibrary_Core.Drone;
+﻿using ClassLibrary_Core.Data;
+using ClassLibrary_Core.Drone;
 using ClassLibrary_Core.Message;
 using ClassLibrary_Core.Mission;
+using Microsoft.Data.SqlClient;
+using System.Threading.Tasks;
 using System.Timers;
 namespace WebApplication_Drone.Services
 {
@@ -18,12 +21,20 @@ namespace WebApplication_Drone.Services
         /// 无人机数据
         /// </summary>
         private readonly object _lock = new();
-
-
+        /// <summary>
+        /// 数据库连接
+        /// </summary>
+        private readonly SqlserverService _sqlserverService;
         /// <summary>
         /// 无人机数据变更事件
         /// </summary>
         public event EventHandler<DroneChangedEventArgs>? DroneChanged;
+
+        public DroneDataService(SqlserverService sqlserverService) 
+        {
+            _sqlserverService = sqlserverService;
+        }
+      
 
 
 
@@ -34,7 +45,11 @@ namespace WebApplication_Drone.Services
         /// <param name="drone"></param>
         protected virtual void OnDroneChanged(string action, Drone drone)
         {
-            DroneChanged?.Invoke(this, new DroneChangedEventArgs { Action = action, Drone = drone });
+            DroneChanged?.Invoke(this, new DroneChangedEventArgs
+            {
+                Action = action,
+                Drone = CloneDrone(drone) // 避免外部修改
+            });
         }
         /// <summary>
         /// 获取所有无人机数据的副本
@@ -54,7 +69,7 @@ namespace WebApplication_Drone.Services
         /// </summary>
         /// <param name="id"></param>
         /// <returns></returns>
-        public Drone? GetDrone(int id)
+        public Drone? GetDrone(Guid id)
         {
             lock (_lock)
             {
@@ -69,64 +84,54 @@ namespace WebApplication_Drone.Services
         {
             lock (_lock)
             {
-                // 1. 记录本次所有无人机Id
+
+                // 处理名称匹配的无人机ID
                 var nameIdMap = _drones.ToDictionary(d => d.Name, d => d.Id);
-                var newList = drones.Select(d =>
-                {
-                    if (nameIdMap.TryGetValue(d.Name, out var existingId))
-                    {
-                        d.Id = existingId;
-                    }
+                var newList = drones.Select(d => {
+                    if (nameIdMap.TryGetValue(d.Name, out var id)) d.Id = id;
                     return d;
                 }).ToList();
-                var newIds = new HashSet<int>(newList.Select(d => d.Id));
 
-                // 2. 找出上一次有但本次没有的无人机
+                // 检测离线无人机
+                var newIds = new HashSet<Guid>(newList.Select(d => d.Id));
                 var lostDrones = _lastDrones
                     .Where(d => !newIds.Contains(d.Id))
-                    .Select(d =>
-                    {
-                        d.Status = DroneStatus.Offline;
-                        return d;
-                    })
+                    .Select(d => { d.Status = DroneStatus.Offline; return d; })
                     .ToList();
 
-                // 3. 更新邻接关系（新增部分）
-                // 3.1 移除所有无人机中指向离线无人机的连接
-                foreach (var drone in _drones)
-                {
-                    drone.ConnectedDroneIds.RemoveAll(id => !newIds.Contains(id));
-                }
+                // 更新邻接关系
+                UpdateDroneConnections(newList);
 
-                // 3.2 为新增无人机建立邻接关系（类似AddDrone中的逻辑）
-                foreach (var drone in newList.Where(d => !_lastDrones.Any(ld => ld.Id == d.Id)))
-                {
-                    var nearbyDrones = newList
-                        .Where(d =>
-                            d.Id != drone.Id &&
-                            d.Status != DroneStatus.Offline &&
-                            d.CurrentPosition.DistanceTo(drone.CurrentPosition) <= drone.radius)
-                        .Select(d => d.Id)
-                        .ToList();
-
-                    drone.ConnectedDroneIds = new List<int>(nearbyDrones);
-
-                    foreach (var nearbyId in nearbyDrones)
-                    {
-                        var nearbyDrone = newList.First(d => d.Id == nearbyId);
-                        if (!nearbyDrone.ConnectedDroneIds.Contains(drone.Id))
-                        {
-                            nearbyDrone.ConnectedDroneIds.Add(drone.Id);
-                        }
-                    }
-                }
-                // 4. 合并：本次数据 + 丢失的无人机（状态已设为Offline）
+                // 合并数据
                 _drones.Clear();
                 _drones.AddRange(newList);
                 _drones.AddRange(lostDrones);
+                _lastDrones = _drones.Select(CloneDrone).ToList();
 
-                // 5. 更新快照
-                _lastDrones = _drones.Select(d => CloneDrone(d)).ToList();
+                // 同步到数据库
+                _ = Task.Run(() => _sqlserverService.BulkUpdateDrones(_drones));
+            }
+        }
+        /// <summary>
+        /// 更新邻接关系
+        /// </summary>
+        /// <param name="newDrones"></param>
+        private void UpdateDroneConnections(List<Drone> newDrones)
+        {
+            var onlineDrones = newDrones.Where(d => d.Status != DroneStatus.Offline).ToList();
+
+            // 清空旧连接
+            foreach (var drone in _drones)
+                drone.ConnectedDroneIds.Clear();
+
+            // 重建连接
+            foreach (var drone in onlineDrones)
+            {
+                drone.ConnectedDroneIds = onlineDrones
+                    .Where(d => d.Id != drone.Id &&
+                        d.CurrentPosition.DistanceTo(drone.CurrentPosition) <= drone.radius)
+                    .Select(d => d.Id)
+                    .ToList();
             }
         }
         /// <summary>
@@ -137,32 +142,25 @@ namespace WebApplication_Drone.Services
         {
             lock (_lock)
             {
-                var existingDrone = _drones.FirstOrDefault(d => d.Name == drone.Name);
-                if (existingDrone != null)
-                {
-                    // 保持相同ID
-                    drone.Id = existingDrone.Id;
-                }
+                var existing = _drones.FirstOrDefault(d => d.Name == drone.Name);
+                if (existing != null) drone.Id = existing.Id;
+
                 if (!_drones.Any(d => d.Id == drone.Id))
-                { // 检测半径范围内的无人机
-                    var nearbyDrones = _drones
-                        .Where(d =>
-                            d.Status != DroneStatus.Offline &&
+                {
+                    // 建立新连接
+                    var nearby = _drones
+                        .Where(d => d.Status != DroneStatus.Offline &&
                             d.CurrentPosition.DistanceTo(drone.CurrentPosition) <= drone.radius)
-                        .Select(d => d.Id)
                         .ToList();
-                    drone.ConnectedDroneIds = new List<int>(nearbyDrones);
-                    foreach (var nearbyId in nearbyDrones)
-                    {
-                        var nearbyDrone = _drones.First(d => d.Id == nearbyId);
-                        if (!nearbyDrone.ConnectedDroneIds.Contains(drone.Id))
-                        {
-                            nearbyDrone.ConnectedDroneIds.Add(drone.Id);
-                        }
-                    }
+
+                    drone.ConnectedDroneIds = nearby.Select(d => d.Id).ToList();
+                    foreach (var neighbor in nearby)
+                        neighbor.ConnectedDroneIds.Add(drone.Id);
+
                     _drones.Add(drone);
+                    _sqlserverService.AddOrUpdateDroneAsync(drone);
+                    OnDroneChanged("Add", drone);
                 }
-                    
             }
         }
         /// <summary>
@@ -174,19 +172,24 @@ namespace WebApplication_Drone.Services
         {
             lock (_lock)
             {
-                var idx = _drones.FindIndex(d => d.Id == drone.Id);
-                if (idx >= 0)
+                var index = _drones.FindIndex(d => d.Id == drone.Id);
+                if (index < 0) return false;
+
+                var oldDrone = _drones[index];
+                _drones[index] = drone;
+
+                // 状态处理
+                if (drone.Status == DroneStatus.Offline)
                 {
-                    _drones[idx] = drone;
-                    if(drone.Status==DroneStatus.Offline)
-                    {
-                        // 如果状态是Offline，清除子任务
-                        _drones[idx].AssignedSubTasks.Clear();
-                        OnDroneChanged("Delete", drone);
-                    }
-                   return true;
+                    drone.AssignedSubTasks.Clear();
+                    // 断开所有连接
+                    foreach (var other in _drones)
+                        other.ConnectedDroneIds.Remove(drone.Id);
                 }
-                return false;
+
+                _sqlserverService.AddOrUpdateDroneAsync(drone);
+                OnDroneChanged("Update", drone);
+                return true;
             }
         }
         /// <summary>
@@ -194,7 +197,7 @@ namespace WebApplication_Drone.Services
         /// </summary>
         /// <param name="id">指定无人机id</param>
         /// <returns>删除成功与否</returns>
-        public bool DeleteDrone(int id)
+        public bool DeleteDrone(Guid id)
         {
             lock (_lock)
             {
@@ -210,7 +213,7 @@ namespace WebApplication_Drone.Services
         /// <summary>
         /// 获取指定无人机的所有子任务
         /// </summary>
-        public List<SubTask> GetSubTasks(int droneId)
+        public List<SubTask> GetSubTasks(Guid droneId)
         {
             lock (_lock)
             {
@@ -221,7 +224,7 @@ namespace WebApplication_Drone.Services
         /// <summary>
         /// 获取指定无人机的指定子任务
         /// </summary>
-        public SubTask? GetSubTask(int droneId, Guid subTaskId)
+        public SubTask? GetSubTask(Guid droneId, Guid subTaskId)
         {
             lock (_lock)
             {
@@ -232,7 +235,7 @@ namespace WebApplication_Drone.Services
         /// <summary>
         /// 为指定无人机添加子任务
         /// </summary>
-        public bool AddSubTask(int droneId, SubTask subTask)
+        public bool AddSubTask(Guid droneId, SubTask subTask)
         {
             lock (_lock)
             {
@@ -249,7 +252,7 @@ namespace WebApplication_Drone.Services
         /// <summary>
         /// 更新指定无人机的子任务
         /// </summary>
-        public bool UpdateSubTask(int droneId, SubTask subTask)
+        public bool UpdateSubTask(Guid droneId, SubTask subTask)
         {
             lock (_lock)
             {
@@ -267,7 +270,7 @@ namespace WebApplication_Drone.Services
         /// <summary>
         /// 删除指定无人机的子任务
         /// </summary>
-        public bool RemoveSubTask(int droneId, Guid subTaskId)
+        public bool RemoveSubTask(Guid droneId, Guid subTaskId)
         {
             lock (_lock)
             {
@@ -298,9 +301,53 @@ namespace WebApplication_Drone.Services
                 radius = d.radius,
                 left_bandwidth = d.left_bandwidth,
                 memory = d.memory,
-                ConnectedDroneIds = new List<int>(d.ConnectedDroneIds),
+                ConnectedDroneIds = new List<Guid>(d.ConnectedDroneIds),
                 AssignedSubTasks = d.AssignedSubTasks.ToList()
             };
+        }
+
+        /// <summary>
+        /// 获取指定无人机在最近一段时间的数据
+        /// </summary>
+        /// <param name="droneId"></param>
+        /// <param name="duration"></param>
+        /// <returns></returns>
+        public async Task<List<DroneDataPoint>> GetRecentDroneDataAsync(Guid droneId, TimeSpan duration)
+        {
+              return await _sqlserverService.GetDroneStatusHistoryAsync(droneId, DateTime.UtcNow - duration, DateTime.UtcNow);            
+        }
+        /// <summary>
+        /// 获取指定无人机在指定任务期间的数据
+        /// </summary>
+        /// <param name="droneId"></param>
+        /// <param name="taskId"></param>
+        /// <returns></returns>
+            public async Task<List<DroneDataPoint>> GetDroneTaskDataAsync(Guid droneId, Guid taskId)
+            {
+            // 获取任务时间范围
+            var taskTimeRange = await _sqlserverService.GetTaskTimeRangeAsync(taskId);
+            if (taskTimeRange == null)
+            {
+                return new List<DroneDataPoint>();
+            }
+
+            // 获取无人机在任务时间范围内的数据
+            return await _sqlserverService.GetDroneDataInTimeRangeAsync(
+                droneId,
+                taskTimeRange.StartTime,
+                taskTimeRange.EndTime
+            );
+        }
+        /// <summary>
+        /// 获取指定时间段中指定无人机的数据
+        /// </summary>
+        /// <param name="startTime"></param>
+        /// <param name="endTime"></param>
+        /// <returns></returns>
+        public async Task<List<DroneDataPoint>> GetAllDronesDataInTimeRangeAsync(DateTime startTime, DateTime endTime)
+        {
+            List<DroneDataPoint> recentData = new List<DroneDataPoint>();
+            return recentData;
         }
     }
     /// <summary>

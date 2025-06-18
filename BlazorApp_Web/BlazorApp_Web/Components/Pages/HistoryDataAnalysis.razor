@@ -1,62 +1,86 @@
 ﻿@page "/history-analysis"
 @using System.Globalization
+@using ClassLibrary_Core.Data
+@using ClassLibrary_Core.Drone
+@using ClassLibrary_Core.Mission
 @inject HttpClient Http
-@inject IJSRuntime JSRuntime
-
 <h3>无人机与任务历史数据分析</h3>
-
 <div class="container-fluid">
     <div class="row">
         <div class="col-md-12">
             <ul class="nav nav-tabs">
                 <li class="nav-item">
-                    <a class="nav-link @(activeTab=="drone"?"active":"")" @onclick="()=>activeTab='drone'">无人机数据</a>
+                    <a class="nav-link @(activeTab=="drone"?"active":"")" @onclick="@(()=>activeTab="drone")">无人机数据</a>
+                </li>
+               @*  <li class="nav-item">
+                    <a class="nav-link @(activeTab=="task"?"active":"")" @onclick="@(()=>activeTab="task")">任务数据</a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link @(activeTab=="task"?"active":"")" @onclick="()=>activeTab='task'">任务数据</a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link @(activeTab=="time"?"active":"")" @onclick="()=>activeTab='time'">时间范围分析</a>
-                </li>
+                    <a class="nav-link @(activeTab=="time"?"active":"")" @onclick="@(()=>activeTab="time")">时间范围分析</a>
+                </li> *@
             </ul>
         </div>
     </div>
-
-    @if (activeTab == "drone")
-    {
-        <DroneDataAnalysis 
-            OnDataLoaded="LoadDroneData"
-            OnChartRendered="RenderDroneChart" />
-    }
-    else if (activeTab == "task")
-    {
-        <TaskDataAnalysis 
-            OnDataLoaded="LoadTaskData"
-            OnChartRendered="RenderTaskChart" />
-    }
-    else if (activeTab == "time")
-    {
-        <TimeRangeAnalysis 
-            OnDataLoaded="LoadTimeRangeData"
-            OnChartRendered="RenderTimeRangeChart" />
-    }
+@if (activeTab == "drone")
+{
+     <DroneDataAnalysis 
+        OnDataLoaded="LoadDroneData"
+        AvailableDrones="DataDrones"
+        DataPoints="DataPoints" />
+     }
+@* else if (activeTab == "task")
+{
+      <TaskDataAnalysis 
+        OnDataLoaded="LoadTaskData"
+         />
+}
+else if (activeTab == "time")
+{
+      <TimeRangeAnalysis 
+        OnDataLoaded="LoadTimeRangeData"
+        OnChartRendered="RenderTimeRangeChart" />
+} *@
 </div>
-
 @code {
     private string activeTab = "drone";
-    
+    private List<Drone> DataDrones { get; set; } = new List<Drone>();
+    private List<MainTask> DataTasks { get; set; } = new List<MainTask>();
+    private List<DroneDataPoint> DataPoints { get; set; } = new List<DroneDataPoint>(); // 用于存储无人机数据点
+    protected override async Task OnInitializedAsync()
+    {
+        // 初始化时加载数据
+        var response = await Http.GetAsync("api/hitory/drones/all");
+        if (response.IsSuccessStatusCode)
+        {
+            var content = await response.Content.ReadAsStringAsync();
+            // 处理内容
+            DataDrones = System.Text.Json.JsonSerializer.Deserialize<List<Drone>>(content, new System.Text.Json.JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+        }
+        else
+        {
+            // 处理错误...
+        }
+    }
     private async Task LoadDroneData(DroneDataRequest request)
     {
         // 调用API获取无人机数据
         // 实现根据请求参数调用不同API端点
+        if (request.model==1)
+        {
+            var response = await Http.PostAsJsonAsync($"api/hitory/drone/{request.drone}/recent", request.timeSpan);
+            if (response.IsSuccessStatusCode)
+            {
+                DataPoints = await response.Content.ReadFromJsonAsync<List<DroneDataPoint>>();
+               
+            }
+            else
+            {
+                // 处理错误...
+            }
+        }
     }
-    
-    private async Task RenderDroneChart(DroneDataResponse data)
-    {
-        // 使用Chart.js渲染图表
-        await JSRuntime.InvokeVoidAsync("renderDroneChart", data);
-    }
-    
-    // 其他数据处理方法...
 }
 

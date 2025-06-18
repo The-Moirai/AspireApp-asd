@@ -1,3 +1,4 @@
+using Microsoft.Data.SqlClient;
 using Microsoft.OpenApi.Models;
 using WebApplication_Drone;
 using WebApplication_Drone.Services;
@@ -29,6 +30,7 @@ builder.Services.AddSwaggerGen(c =>
         Format = "binary"
     });
 });
+builder.Services.AddSingleton<SqlserverService>();
 //Api测试时需将socket服务及socket连接服务器的后台服务注释掉
 //socket连接服务器
 builder.Services.AddSingleton<SocketService>();

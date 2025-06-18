@@ -7,7 +7,7 @@ namespace ClassLibrary_Core.Drone
         /// <summary>
         /// 无人机的唯一标识符
         /// </summary>
-        public int Id { get; set; }
+        public Guid Id { get; set; }
         /// <summary>
         /// 无人机的名称
         /// </summary>
@@ -43,7 +43,7 @@ namespace ClassLibrary_Core.Drone
         /// <summary>
         /// 无人机的邻接表
         /// </summary>
-        public List<int> ConnectedDroneIds { get; set; } = new();
+        public List<Guid> ConnectedDroneIds { get; set; } = new();
         /// <summary>
         /// 无人机的子任务列表
         /// </summary>

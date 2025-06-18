@@ -14,13 +14,13 @@ var creationScript = $$"""
     USE [{{databaseName}}];
     GO
 
-    CREATE TABLE Drones  (
-          Id INT IDENTITY(1,1) PRIMARY KEY,          -- 无人机历史记录表主键
-          DroneId NVARCHAR(50) NOT NULL,             -- 无人机唯一标识符
-    	  ModelType NVARCHAR(50) NOT NULL,			 -- 无人机类型-实体/虚拟
-          Latitude FLOAT NOT NULL,                   -- 纬度
-          Longitude FLOAT NOT NULL,                  -- 经度
-      );
+        CREATE TABLE Drones  (
+              Id INT IDENTITY(1,1) PRIMARY KEY,          -- 无人机历史记录表主键
+              DroneId NVARCHAR(50) NOT NULL,             -- 无人机唯一标识符
+    	      ModelType NVARCHAR(50) NOT NULL,			 -- 无人机类型-实体/虚拟
+              Latitude FLOAT NOT NULL,                   -- 纬度
+              Longitude FLOAT NOT NULL,                  -- 经度
+          );
     GO
     CREATE TABLE DroneStatusHistory (
         Id BIGINT IDENTITY(1,1) PRIMARY KEY,
@@ -29,6 +29,7 @@ var creationScript = $$"""
         Timestamp DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
         CpuUsedRate DECIMAL(5,2) NULL,							-- cpu使用率
         LeftBandwidth DECIMAL(10,2) NULL,						-- 带宽使用率
+        Memory DECIMAL(10,2) NULL,                              -- 内存使用率
         Latitude DECIMAL(10,7) NULL,							-- 纬度
         Longitude DECIMAL(10,7) NULL,							-- 经度
 

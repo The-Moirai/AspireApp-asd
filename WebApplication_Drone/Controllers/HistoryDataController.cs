@@ -22,7 +22,7 @@ namespace WebApplication_Drone.Controllers
             // 1. 单个无人机最新一段时间的数据
             [HttpGet("drone/{droneId}/recent")]
             public async Task<IActionResult> GetRecentDroneData(
-                string droneId,
+                Guid droneId,
                 [FromQuery] TimeSpan duration)
             {
                 var data = await _droneDataService.GetRecentDroneDataAsync(droneId, duration);
@@ -32,8 +32,8 @@ namespace WebApplication_Drone.Controllers
             // 2. 单个无人机指定任务期间的数据
             [HttpGet("drone/{droneId}/task/{taskId}")]
             public async Task<IActionResult> GetDroneTaskData(
-                string droneId,
-                string taskId)
+                Guid droneId,
+                Guid taskId)
             {
                 var data = await _droneDataService.GetDroneTaskDataAsync(droneId, taskId);
                 return Ok(data);
@@ -41,8 +41,8 @@ namespace WebApplication_Drone.Controllers
             // 3. 单个任务中指定无人机的数据
             [HttpGet("task/{taskId}/drone/{droneId}")]
             public async Task<IActionResult> GetTaskDroneData(
-                string taskId,
-                string droneId)
+                Guid taskId,
+                Guid droneId)
             {
                 var data = await _taskDataService.GetTaskDroneDataAsync(taskId, droneId);
                 return Ok(data);
@@ -50,7 +50,7 @@ namespace WebApplication_Drone.Controllers
 
             // 4. 单个任务期间所有无人机的数据
             [HttpGet("task/{taskId}/drones")]
-            public async Task<IActionResult> GetTaskAllDronesData(string taskId)
+            public async Task<IActionResult> GetTaskAllDronesData(Guid taskId)
             {
                 var data = await _taskDataService.GetTaskAllDronesDataAsync(taskId);
                 return Ok(data);
@@ -74,6 +74,13 @@ namespace WebApplication_Drone.Controllers
             {
                 var data = await _taskDataService.GetAllTasksDataInTimeRangeAsync(startTime, endTime);
                 return Ok(data);
-            }       
+            }
+            // 7. 获取所有无人机记录
+            [HttpGet("drones/all")]
+            public IActionResult GetAllDronesHistory()
+            {
+                var history = _droneDataService.GetDrones();
+                return Ok(history);
+        }
     }
-    }
+}

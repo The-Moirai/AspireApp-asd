@@ -35,7 +35,11 @@ namespace ClassLibrary_Core.Mission
         /// <summary>
         /// 子任务所属的大任务
         /// </summary>
-        public MainTask ParentTask { get; set; }
+        public Guid ParentTask { get; set; }
+        /// <summary>
+        /// 子任务重分配次数
+        /// </summary>
+        public int ReassignmentCount { get; set; } = 0;
         /// <summary>
         /// 子任务分配的无人机
         /// </summary>

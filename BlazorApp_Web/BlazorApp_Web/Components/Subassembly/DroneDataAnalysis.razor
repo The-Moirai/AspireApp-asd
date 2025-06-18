@@ -1,4 +1,11 @@
-﻿<div class="card">
+﻿@using ClassLibrary_Core.Data
+@using ClassLibrary_Core.Drone
+@using ClassLibrary_Core.Mission
+@using LiveChartsCore
+@using LiveChartsCore.SkiaSharpView
+@using LiveChartsCore.SkiaSharpView.Painting
+@using SkiaSharp
+<div class="card">
     <div class="card-header">
         <h5>无人机历史数据分析</h5>
     </div>
@@ -45,7 +52,18 @@
 
                 <button class="btn btn-primary" @onclick="LoadData">查询</button>
             </div>
+            <div class="col-md-8">
+        <!-- 使用 LiveCharts2 替代 Chart.js -->
+            <CartesianChart
+                Height="400"
+                Series="droneSeries"
+                XAxes="xAxes"
+                YAxes="yAxes"
+                LegendPosition="LegendPosition.Top">
+            </CartesianChart>
 
+        <!-- 数据表格保持不变 -->
+            </div>
             <div class="col-md-8">
                 <div class="chart-container">
                     <canvas id="droneChart"></canvas>
@@ -59,7 +77,6 @@
                             <thead>
                                 <tr>
                                     <th>时间</th>
-                                    <th>电量</th>
                                     <th>位置</th>
                                     <th>状态</th>
                                 </tr>
@@ -69,7 +86,8 @@
                                 {
                                     <tr>
                                         <td>@point.Timestamp.ToString("g")</td>
-                                        <td>@point.BatteryLevel.ToString("P1")</td>
+                                        <td>@point.cpuUsage.ToString("P1")</td>
+                                        <td>@point.memoryUsage.ToString("P1")</td>
                                         <td>@point.Latitude.ToString("N6"), @point.Longitude.ToString("N6")</td>
                                         <td>@point.Status</td>
                                     </tr>
@@ -87,8 +105,68 @@
     [Parameter]
     public EventCallback<DroneDataRequest> OnDataLoaded { get; set; }
 
-    [Parameter]
-    public EventCallback<DroneDataResponse> OnChartRendered { get; set; }
+    //[Parameter]
+    //public EventCallback<DroneDataResponse> OnChartRendered { get; set; }
+
+    private ISeries[] droneSeries = Array.Empty<ISeries>();
+    private Axis[] xAxes = Array.Empty<Axis>();
+    private Axis[] yAxes = Array.Empty<Axis>();
+    public List<Drone> AvailableDrones { get; set; } = new List<Drone>();
+    public List<MainTask> AvailableTasks { get; set; } = new List<MainTask>();
+    public List<DroneDataPoint> DataPoints { get; set; } = new List<DroneDataPoint>(); // 用于存储无人机数据点
+    public string SelectedDroneId { get; set; } = "1"; // 默认选择第一个无人机
+    public string AnalysisType { get; set; } = "recent"; // 默认分析类型
+    public int Hours { get; set; } = 24; // 默认时间段为24小时
+    public string SelectedTaskId { get; set; } = ""; // 默认无特定任务选择
+
 
     // 数据属性和方法...
+    private void LoadData()
+    {
+        var request = new DroneDataRequest {model=1,drone = Int32.Parse(SelectedDroneId),timeSpan=TimeSpan.FromHours(Hours)};
+        // 填充请求参数
+        OnDataLoaded.InvokeAsync(request);
+    }
+    private void RenderDroneChart(List<DroneDataPoint> data)
+    {
+        xAxes = new[]
+        {
+            new Axis
+            {
+                Labeler = value => new DateTime((long)value).ToString("HH:mm"),
+                LabelsRotation = 15,
+                UnitWidth = TimeSpan.FromMinutes(1).Ticks
+            }
+        };
+
+        yAxes = new[]
+        {
+            new Axis { Name = "cpu" },
+            new Axis { Name = "memoryUsage", ShowSeparatorLines = false, Position = LiveChartsCore.Measure.AxisPosition.End }
+        };
+
+        droneSeries = new ISeries[]
+        {
+            new LineSeries<decimal>
+            {
+                Name = "cpu",
+                Values = data.Select(d => (decimal)d.cpuUsage).ToList(),
+                Stroke = new LiveChartsCore.SkiaSharpView.Painting.SolidColorPaint(SKColors.DarkGreen) { StrokeThickness = 2 },
+                Fill = null,
+                GeometrySize = 0,
+                YToolTipLabelFormatter = point => $"{point.Model:N1}%"
+            },
+            new LineSeries<decimal>
+            {
+                Name = "memoryUsage",
+                Values = data.Select(d => (decimal)d.memoryUsage).ToList(),
+                Stroke = new SolidColorPaint(SKColors.Blue) { StrokeThickness = 2 },
+                Fill = null,
+                GeometrySize = 0,
+                ScalesYAt = 1, // 使用第二个Y轴
+                YToolTipLabelFormatter = point => $"{point.Model:N1}米"
+            }
+        };
+    }
+
 }
