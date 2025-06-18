@@ -8,15 +8,12 @@ public class SocketBackgroundService : BackgroundService
     private readonly SocketService _socketService;
     private readonly MissionSocketService _missionsocketService;
 
-    public SocketBackgroundService(SocketService socketService, MissionSocketService missionsocketService)
-    {
-        _socketService = socketService;
-        _missionsocketService= missionsocketService;
     private readonly SqlserverService _sqlserverService;
 
-    public SocketBackgroundService(SocketService socketService, SqlserverService sqlserverService)
+    public SocketBackgroundService(SocketService socketService, SqlserverService sqlserverService, MissionSocketService missionsocketService)
     {
         _socketService = socketService;
+        _missionsocketService = missionsocketService;
         _sqlserverService = sqlserverService;
     }
 

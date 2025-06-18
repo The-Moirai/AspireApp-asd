@@ -1,0 +1,112 @@
+<div class="row">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h6><i class="fas fa-database"></i> 数据同步</h6>
+            </div>
+            <div class="card-body">
+                <p class="text-muted mb-3">管理内存和数据库之间的数据同步</p>
+                <div class="d-grid gap-2">
+                    <button class="btn btn-outline-primary" @onclick="HandleLoadFromDatabase" disabled="@IsLoading">
+                        @if (IsLoading && CurrentOperation == "load")
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                        }
+                        <i class="fas fa-download me-1"></i> 从数据库加载任务
+                    </button>
+                    <button class="btn btn-outline-success" @onclick="HandleSyncToDatabase" disabled="@IsLoading">
+                        @if (IsLoading && CurrentOperation == "sync")
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                        }
+                        <i class="fas fa-upload me-1"></i> 同步任务到数据库
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h6><i class="fas fa-tools"></i> 任务维护</h6>
+            </div>
+            <div class="card-body">
+                <p class="text-muted mb-3">管理失败和过期的任务</p>
+                <div class="d-grid gap-2">
+                    <button class="btn btn-outline-warning" @onclick="HandleReassignFailedTasks" disabled="@IsLoading">
+                        @if (IsLoading && CurrentOperation == "reassign")
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                        }
+                        <i class="fas fa-redo me-1"></i> 重新分配失败任务
+                    </button>
+                    <div class="input-group">
+                        <input type="number" class="form-control" @bind="cleanupDays" 
+                               placeholder="天数" min="1" max="365" />
+                        <button class="btn btn-outline-danger" @onclick="HandleCleanupOldTasks" disabled="@IsLoading">
+                            @if (IsLoading && CurrentOperation == "cleanup")
+                            {
+                                <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                            }
+                            <i class="fas fa-trash me-1"></i> 清理旧任务
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 操作结果显示 -->
+@if (!string.IsNullOrEmpty(Message))
+{
+    <div class="row mt-3">
+        <div class="col-12">
+            <div class="alert @(IsSuccess ? "alert-success" : "alert-danger") alert-dismissible fade show">
+                <i class="fas @(IsSuccess ? "fa-check-circle" : "fa-exclamation-triangle") me-2"></i>
+                @Message
+                <button type="button" class="btn-close" @onclick="ClearMessage" aria-label="关闭"></button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsLoading { get; set; }
+    [Parameter] public string CurrentOperation { get; set; } = "";
+    [Parameter] public string Message { get; set; } = "";
+    [Parameter] public bool IsSuccess { get; set; }
+    
+    [Parameter] public EventCallback OnLoadFromDatabase { get; set; }
+    [Parameter] public EventCallback OnSyncToDatabase { get; set; }
+    [Parameter] public EventCallback OnReassignFailedTasks { get; set; }
+    [Parameter] public EventCallback<int> OnCleanupOldTasks { get; set; }
+    [Parameter] public EventCallback OnClearMessage { get; set; }
+
+    private int cleanupDays = 30;
+
+    private async Task HandleLoadFromDatabase()
+    {
+        await OnLoadFromDatabase.InvokeAsync();
+    }
+
+    private async Task HandleSyncToDatabase()
+    {
+        await OnSyncToDatabase.InvokeAsync();
+    }
+
+    private async Task HandleReassignFailedTasks()
+    {
+        await OnReassignFailedTasks.InvokeAsync();
+    }
+
+    private async Task HandleCleanupOldTasks()
+    {
+        await OnCleanupOldTasks.InvokeAsync(cleanupDays);
+    }
+
+    private async Task ClearMessage()
+    {
+        await OnClearMessage.InvokeAsync();
+    }
+} 

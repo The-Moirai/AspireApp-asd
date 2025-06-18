@@ -66,9 +66,7 @@ namespace WebApplication_Drone.Services
                         var message = JsonSerializer.Deserialize<MessageFromNode>(messageJson);
                         if (message != null && message.type == "task_info")
                         {
-
                             _taskDataService.CompleteSubTask(Guid.Parse(((string)(message.content["subtask_name"])).Split("_")[0]), message.content["subtask_name"]);
-
                         }
                     }
                 }

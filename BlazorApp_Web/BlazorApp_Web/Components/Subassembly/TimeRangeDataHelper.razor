@@ -1,0 +1,109 @@
+@if (Data != null)
+{
+    <div class="card">
+        <div class="card-header">
+            <h6 class="mb-0">
+                <i class="fas fa-info-circle"></i> @Data.Name (@Data.Type)
+            </h6>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-6">
+                    <h6>数据概要</h6>
+                    <p>记录数量: <strong>@Data.RecordCount.ToString("N0")</strong></p>
+                    <p>查询范围: @GetQueryTimeSpan()</p>
+                    <p>数据覆盖: @GetDataTimeSpan()</p>
+                </div>
+                <div class="col-md-6">
+                    <h6>数据质量</h6>
+                    <span class="badge @GetDataQualityBadgeClass()">
+                        @GetDataQualityDescription()
+                    </span>
+                    <span class="badge @GetCompletenessClass()">
+                        完整度: @GetDataCompleteness().ToString("F1")%
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public TimeRangeData? Data { get; set; }
+
+    private string GetQueryTimeSpan()
+    {
+        if (Data == null) return "";
+        var span = Data.EndTime - Data.StartTime;
+        return FormatTimeSpan(span);
+    }
+
+    private string GetDataTimeSpan()
+    {
+        if (Data == null) return "";
+        var span = Data.LatestTime - Data.EarliestTime;
+        return FormatTimeSpan(span);
+    }
+
+    private string FormatTimeSpan(TimeSpan span)
+    {
+        if (span.TotalDays >= 1)
+            return $"{span.TotalDays:F1} 天";
+        else if (span.TotalHours >= 1)
+            return $"{span.TotalHours:F1} 小时";
+        else
+            return $"{span.TotalMinutes:F0} 分钟";
+    }
+
+    private double GetDataCompleteness()
+    {
+        if (Data == null) return 0;
+        
+        var querySpan = Data.EndTime - Data.StartTime;
+        var dataSpan = Data.LatestTime - Data.EarliestTime;
+        
+        if (querySpan.TotalMinutes <= 0) return 0;
+        
+        var coverage = Math.Min(dataSpan.TotalMinutes / querySpan.TotalMinutes * 100, 100);
+        return Math.Max(coverage, 0);
+    }
+
+    private string GetDataQualityBadgeClass()
+    {
+        if (Data == null) return "bg-secondary";
+        
+        var completeness = GetDataCompleteness();
+        return completeness switch
+        {
+            >= 90 => "bg-success",
+            >= 70 => "bg-warning",
+            _ => "bg-danger"
+        };
+    }
+
+    private string GetDataQualityDescription()
+    {
+        if (Data == null) return "未知";
+        
+        var completeness = GetDataCompleteness();
+        return completeness switch
+        {
+            >= 95 => "优秀",
+            >= 85 => "良好",
+            >= 70 => "一般",
+            >= 50 => "较差",
+            _ => "很差"
+        };
+    }
+
+    private string GetCompletenessClass()
+    {
+        var completeness = GetDataCompleteness();
+        return completeness switch
+        {
+            >= 90 => "bg-success",
+            >= 70 => "bg-warning",
+            _ => "bg-danger"
+        };
+    }
+} 

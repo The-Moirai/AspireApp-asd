@@ -1,0 +1,41 @@
+<div class="card">
+    <div class="card-header">
+        <ul class="nav nav-tabs card-header-tabs">
+            @foreach (var tab in Tabs)
+            {
+                <li class="nav-item">
+                    <a class="nav-link @(ActiveTab == tab.Key ? "active" : "")" 
+                       @onclick="@(() => OnTabChanged.InvokeAsync(tab.Key))"
+                       style="cursor: pointer;">
+                        <i class="@tab.Value.Icon"></i> @tab.Value.Title
+                    </a>
+                </li>
+            }
+        </ul>
+    </div>
+    
+    <div class="card-body">
+        @ChildContent
+    </div>
+</div>
+
+@code {
+    [Parameter] public string ActiveTab { get; set; } = "";
+    [Parameter] public EventCallback<string> OnTabChanged { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private Dictionary<string, TabInfo> Tabs { get; set; } = new()
+    {
+        { "drone", new TabInfo { Title = "无人机数据", Icon = "fas fa-helicopter" } },
+        { "task", new TabInfo { Title = "任务数据", Icon = "fas fa-tasks" } },
+        { "time", new TabInfo { Title = "时间范围分析", Icon = "fas fa-clock" } },
+        { "statistics", new TabInfo { Title = "统计分析", Icon = "fas fa-chart-bar" } },
+        { "management", new TabInfo { Title = "数据管理", Icon = "fas fa-cogs" } }
+    };
+
+    public class TabInfo
+    {
+        public string Title { get; set; } = "";
+        public string Icon { get; set; } = "";
+    }
+} 

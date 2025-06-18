@@ -1,0 +1,117 @@
+@using ClassLibrary_Core.Mission
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h6>过期任务监控</h6>
+        <div>
+            <input type="number" class="form-control form-control-sm d-inline-block" 
+                   style="width: 80px;" @bind="timeoutMinutes" />
+            <label class="ml-1">分钟</label>
+            <button class="btn btn-outline-warning btn-sm ml-2" @onclick="CheckExpiredTasks">
+                检查过期任务
+            </button>
+        </div>
+    </div>
+    <div class="card-body">
+        @if (ExpiredTasks.Any())
+        {
+            <div class="alert alert-warning">
+                <strong>发现 @ExpiredTasks.Count 个过期任务!</strong>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm table-hover">
+                    <thead>
+                        <tr>
+                            <th>任务ID</th>
+                            <th>描述</th>
+                            <th>分配时间</th>
+                            <th>状态</th>
+                            <th>重分配次数</th>
+                            <th>超时时长</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var task in ExpiredTasks)
+                        {
+                            <tr class="@GetRowClass(task)">
+                                <td>
+                                    <span class="badge badge-secondary" title="@task.Id">
+                                        @task.Id.ToString().Substring(0, 8)...
+                                    </span>
+                                </td>
+                                <td>@task.Description</td>
+                                <td>@task.AssignedTime?.ToString("MM/dd HH:mm")</td>
+                                <td>
+                                    <span class="badge @GetStatusBadgeClass(task.Status)">
+                                        @task.Status
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="badge badge-info">@task.ReassignmentCount</span>
+                                </td>
+                                <td>@GetTimeoutDuration(task)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        else
+        {
+            <div class="text-center">
+                <div class="text-success">
+                    <i class="fas fa-check-circle fa-2x mb-2"></i>
+                    <p class="mb-0">没有发现过期任务</p>
+                </div>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public List<SubTask> ExpiredTasks { get; set; } = new();
+    [Parameter] public EventCallback<int> OnLoadExpiredTasks { get; set; }
+    
+    private int timeoutMinutes = 30;
+
+    private async Task CheckExpiredTasks()
+    {
+        await OnLoadExpiredTasks.InvokeAsync(timeoutMinutes);
+    }
+
+    private string GetRowClass(SubTask task)
+    {
+        if (task.ReassignmentCount > 3)
+            return "table-danger";
+        else if (task.ReassignmentCount > 1)
+            return "table-warning";
+        return "";
+    }
+
+    private string GetStatusBadgeClass(TaskStatus status)
+    {
+        return status switch
+        {
+            TaskStatus.Faulted => "badge-danger",
+            TaskStatus.Canceled => "badge-warning", 
+            TaskStatus.WaitingForActivation => "badge-info",
+            TaskStatus.WaitingToRun => "badge-info",
+            TaskStatus.Running => "badge-primary",
+            TaskStatus.RanToCompletion => "badge-success",
+            _ => "badge-secondary"
+        };
+    }
+
+    private string GetTimeoutDuration(SubTask task)
+    {
+        if (task.AssignedTime.HasValue)
+        {
+            var duration = DateTime.Now - task.AssignedTime.Value;
+            if (duration.TotalHours >= 1)
+                return $"{duration.TotalHours:F1}小时";
+            else
+                return $"{duration.TotalMinutes:F0}分钟";
+        }
+        return "未知";
+    }
+} 

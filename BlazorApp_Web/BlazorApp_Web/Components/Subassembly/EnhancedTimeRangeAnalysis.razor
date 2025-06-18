@@ -1,0 +1,245 @@
+@page "/enhanced-time-analysis"
+@using ClassLibrary_Core.Data
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h4><i class="fas fa-chart-line"></i> 增强时间范围分析</h4>
+                <button class="btn btn-primary" @onclick="LoadAnalysisData">
+                    <i class="fas fa-sync-alt"></i> 刷新数据
+                </button>
+            </div>
+
+            @if (isLoading)
+            {
+                <div class="text-center">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">正在加载...</span>
+                    </div>
+                    <p class="mt-2">正在加载分析数据...</p>
+                </div>
+            }
+            else if (!analysisDataList.Any())
+            {
+                <div class="alert alert-info text-center">
+                    <i class="fas fa-info-circle"></i> 暂无分析数据
+                </div>
+            }
+            else
+            {
+                <!-- 分析配置 -->
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-3">
+                                <label class="form-label">时间范围</label>
+                                <select class="form-select" @bind="selectedTimeRange">
+                                    <option value="24h">过去24小时</option>
+                                    <option value="7d">过去7天</option>
+                                    <option value="30d">过去30天</option>
+                                    <option value="custom">自定义</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">数据类型</label>
+                                <select class="form-select" @bind="selectedDataType">
+                                    <option value="all">全部类型</option>
+                                    <option value="drone">无人机数据</option>
+                                    <option value="task">任务数据</option>
+                                    <option value="system">系统数据</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">分析维度</label>
+                                <select class="form-select" @bind="selectedAnalysisDimension">
+                                    <option value="overview">综合概览</option>
+                                    <option value="performance">性能分析</option>
+                                    <option value="quality">数据质量</option>
+                                    <option value="trend">趋势分析</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3 d-flex align-items-end">
+                                <button class="btn btn-success w-100" @onclick="ApplyFilters">
+                                    <i class="fas fa-filter"></i> 应用筛选
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 数据展示 -->
+                <div class="row">
+                    @foreach (var data in GetFilteredData())
+                    {
+                        <div class="col-md-6 col-lg-4 mb-3">
+                            <TimeRangeDataHelper Data="@data" />
+                        </div>
+                    }
+                </div>
+
+                <!-- 智能分析建议 -->
+                @if (analysisInsights.Any())
+                {
+                    <div class="card">
+                        <div class="card-header bg-info text-white">
+                            <h6 class="mb-0">
+                                <i class="fas fa-lightbulb"></i> 智能分析建议
+                            </h6>
+                        </div>
+                        <div class="card-body">
+                            @foreach (var insight in analysisInsights)
+                            {
+                                <div class="alert @GetInsightAlertClass(insight.Level)" role="alert">
+                                    <strong>@insight.Title</strong>
+                                    <p class="mb-0">@insight.Description</p>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private bool isLoading = false;
+    private List<TimeRangeData> analysisDataList = new();
+    private List<AnalysisInsight> analysisInsights = new();
+    
+    private string selectedTimeRange = "24h";
+    private string selectedDataType = "all";
+    private string selectedAnalysisDimension = "overview";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAnalysisData();
+    }
+
+    private async Task LoadAnalysisData()
+    {
+        isLoading = true;
+        StateHasChanged();
+
+        await Task.Delay(1000); // 模拟数据加载
+
+        // 生成模拟数据
+        analysisDataList = GenerateMockTimeRangeData();
+        analysisInsights = GenerateAnalysisInsights();
+
+        isLoading = false;
+        StateHasChanged();
+    }
+
+    private List<TimeRangeData> GenerateMockTimeRangeData()
+    {
+        var random = new Random();
+        var data = new List<TimeRangeData>();
+
+        for (int i = 0; i < 6; i++)
+        {
+            var mockData = new TimeRangeData
+            {
+                Name = $"数据集 {i + 1}",
+                Type = i % 3 == 0 ? "drone" : i % 3 == 1 ? "task" : "system",
+                StartTime = DateTime.Now.AddHours(-24),
+                EndTime = DateTime.Now,
+                EarliestTime = DateTime.Now.AddHours(-20 - random.Next(0, 4)),
+                LatestTime = DateTime.Now.AddMinutes(-random.Next(5, 60)),
+                RecordCount = random.Next(100, 10000),
+                MinValue = (decimal)(random.NextDouble() * 50),
+                MaxValue = (decimal)(50 + random.NextDouble() * 50),
+                AverageCpuUsage = (decimal)(random.NextDouble() * 100),
+                AverageMemoryUsage = (decimal)(random.NextDouble() * 100),
+                StatusDistribution = new Dictionary<string, int>
+                {
+                    ["正常"] = random.Next(50, 200),
+                    ["警告"] = random.Next(10, 50),
+                    ["异常"] = random.Next(0, 20)
+                },
+                Tags = new List<string> { "实时", "监控", $"类型{i + 1}" }
+            };
+            data.Add(mockData);
+        }
+
+        return data;
+    }
+
+    private List<AnalysisInsight> GenerateAnalysisInsights()
+    {
+        var insights = new List<AnalysisInsight>();
+
+        // 基于数据生成智能建议
+        var totalRecords = analysisDataList.Sum(x => x.RecordCount);
+        var avgCpu = analysisDataList.Where(x => x.AverageCpuUsage.HasValue).Average(x => (double)x.AverageCpuUsage!.Value);
+        var avgMemory = analysisDataList.Where(x => x.AverageMemoryUsage.HasValue).Average(x => (double)x.AverageMemoryUsage!.Value);
+
+        if (avgCpu > 80)
+        {
+            insights.Add(new AnalysisInsight
+            {
+                Level = "warning",
+                Title = "CPU使用率偏高",
+                Description = $"系统平均CPU使用率为 {avgCpu:F1}%，建议优化系统性能或增加资源配置。"
+            });
+        }
+
+        if (avgMemory > 85)
+        {
+            insights.Add(new AnalysisInsight
+            {
+                Level = "danger",
+                Title = "内存使用率过高",
+                Description = $"系统平均内存使用率为 {avgMemory:F1}%，存在内存不足风险，建议立即处理。"
+            });
+        }
+
+        if (totalRecords > 50000)
+        {
+            insights.Add(new AnalysisInsight
+            {
+                Level = "info",
+                Title = "数据量充足",
+                Description = $"系统总记录数为 {totalRecords:N0} 条，数据量充足，适合进行深度分析。"
+            });
+        }
+
+        return insights;
+    }
+
+    private List<TimeRangeData> GetFilteredData()
+    {
+        var filtered = analysisDataList.AsQueryable();
+
+        if (selectedDataType != "all")
+        {
+            filtered = filtered.Where(x => x.Type == selectedDataType);
+        }
+
+        return filtered.ToList();
+    }
+
+    private async Task ApplyFilters()
+    {
+        await LoadAnalysisData();
+    }
+
+    private string GetInsightAlertClass(string level)
+    {
+        return level switch
+        {
+            "info" => "alert-info",
+            "warning" => "alert-warning",
+            "danger" => "alert-danger",
+            _ => "alert-secondary"
+        };
+    }
+
+    public class AnalysisInsight
+    {
+        public string Level { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string Description { get; set; } = "";
+    }
+} 

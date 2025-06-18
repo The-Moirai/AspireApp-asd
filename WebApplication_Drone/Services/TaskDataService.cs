@@ -297,13 +297,13 @@ namespace WebApplication_Drone.Services
         /// <summary>
         /// 完成指定子任务
         /// </summary>
-        public bool CompleteSubTask(Guid mainTaskId, Guid subTaskId)
+        public bool CompleteSubTask(Guid mainTaskId, string subTaskDescription)
         {
             lock (_lock)
             {
                 var mainTask = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
                 if (mainTask == null) return false;
-                var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
+                var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Description == subTaskDescription);
                 if (subTask == null) return false;
 
                 subTask.Status = TaskStatus.RanToCompletion;
