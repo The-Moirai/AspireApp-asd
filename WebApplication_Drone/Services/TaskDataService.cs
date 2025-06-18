@@ -105,8 +105,11 @@ namespace WebApplication_Drone.Services
                 if (idx >= 0)
                 {
                     _tasks[idx] = task;
+                  
+                    // 触发任务变更事件
+                    OnDroneChanged("update", task);
                     //数据库更新操作
-                   
+
                     return true;
                 }
                 return false;
@@ -150,6 +153,8 @@ namespace WebApplication_Drone.Services
                 subTask.AssignedTime = null;
                 subTask.CompletedTime = null;
                 
+                // 触发任务变更事件
+                OnDroneChanged("update", mainTask);
                 return true;
             }
         }
@@ -168,41 +173,50 @@ namespace WebApplication_Drone.Services
                 subTask.AssignedDrone = droneName;
                 subTask.Status = TaskStatus.Running;
                 subTask.AssignedTime = DateTime.Now;
+                
+                // 触发任务变更事件
+                OnDroneChanged("update", mainTask);
                 return true;
             }
         }
         /// <summary>
         /// 分配子任务到无人机
         /// </summary>
-        public bool AssignSubTask(Guid mainTaskId, Guid subTaskId, string droneName)
+        public bool AssignSubTask(Guid mainTaskId,string subTasksName, string droneName)
         {
             lock (_lock)
             {
                 var mainTask = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
                 if (mainTask == null) return false;
-                var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
+                var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Description == subTasksName);
                 if (subTask == null) return false;
                 
                 subTask.AssignedDrone = droneName;
                 subTask.Status = TaskStatus.Running;
                 subTask.AssignedTime = DateTime.Now;
+                
+                // 触发任务变更事件
+                OnDroneChanged("update", mainTask);
                 return true;
             }
         }
         /// <summary>
         /// 完成指定子任务
         /// </summary>
-        public bool CompleteSubTask(Guid mainTaskId, Guid subTaskId)
+        public bool CompleteSubTask(Guid mainTaskId, string subTaskId)
         {
             lock (_lock)
             {
                 var mainTask = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
                 if (mainTask == null) return false;
-                var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
+                var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Description == subTaskId);
                 if (subTask == null) return false;
 
                 subTask.Status = TaskStatus.RanToCompletion;
                 subTask.CompletedTime = DateTime.Now;
+                
+                // 触发任务变更事件
+                OnDroneChanged("update", mainTask);
                 return true;
             }
         }
@@ -215,6 +229,25 @@ namespace WebApplication_Drone.Services
             {
                 var mainTask = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
                 return mainTask?.SubTasks.ToList() ?? new List<SubTask>();
+            }
+        }
+
+        /// <summary>
+        /// 子任务装载在主任务
+        /// </summary>
+        /// <param name="mainTaskId">主任务uuid</param>
+        /// <param name="subTask">子任务实体</param>
+        public void addSubTasks(Guid mainTaskId, SubTask subTask)
+        {
+            lock (_lock)
+            {
+                var mainTask = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
+                if (mainTask != null)
+                {
+                    mainTask.SubTasks.Add(subTask);
+                    // 触发任务变更事件
+                    OnDroneChanged("update", mainTask);
+                }
             }
         }
         /// <summary>

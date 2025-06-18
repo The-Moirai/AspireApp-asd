@@ -2,13 +2,19 @@
 using ClassLibrary_Core.Drone;
 using ClassLibrary_Core.Message;
 using ClassLibrary_Core.Mission;
+
+using Microsoft.Extensions.Logging;
+using System.Text.Json;
+
 using Microsoft.Data.SqlClient;
 using System.Threading.Tasks;
+
 using System.Timers;
 namespace WebApplication_Drone.Services
 {
     public class DroneDataService
     {
+        private readonly ILogger<DroneDataService> _logger;
         /// <summary>
         /// 上一次的无人机快照
         /// </summary>
@@ -21,10 +27,13 @@ namespace WebApplication_Drone.Services
         /// 无人机数据
         /// </summary>
         private readonly object _lock = new();
-        /// <summary>
-        /// 数据库连接
-        /// </summary>
-        private readonly SqlserverService _sqlserverService;
+      
+        public DroneDataService(ILogger<DroneDataService> logger)
+        {
+            _logger = logger;
+            _logger.LogInformation("DroneDataService initialized.");
+        }
+
         /// <summary>
         /// 无人机数据变更事件
         /// </summary>
@@ -82,13 +91,29 @@ namespace WebApplication_Drone.Services
         /// <param name="drones">无人机数据列表</param>
         public void SetDrones(IEnumerable<Drone> drones)
         {
+            if (drones == null || !drones.Any())
+            {
+                _logger.LogWarning("Received null or empty drone data collection. All existing drones will be marked as offline if any.");
+            }
+            else
+            {
+                _logger.LogInformation("Received {DroneCount} drones from source.", drones.Count());
+                _logger.LogDebug("Received drone data: {DroneData}", JsonSerializer.Serialize(drones));
+            }
+
             lock (_lock)
             {
 
                 // 处理名称匹配的无人机ID
                 var nameIdMap = _drones.ToDictionary(d => d.Name, d => d.Id);
-                var newList = drones.Select(d => {
-                    if (nameIdMap.TryGetValue(d.Name, out var id)) d.Id = id;
+
+                var newList = drones.Select(d =>
+                {
+                    if (nameIdMap.TryGetValue(d.Name, out var existingId))
+                    {
+                        
+                        d.Id = existingId;
+                    }
                     return d;
                 }).ToList();
 
@@ -98,6 +123,7 @@ namespace WebApplication_Drone.Services
                     .Where(d => !newIds.Contains(d.Id))
                     .Select(d => { d.Status = DroneStatus.Offline; return d; })
                     .ToList();
+
 
                 // 更新邻接关系
                 UpdateDroneConnections(newList);
@@ -120,6 +146,7 @@ namespace WebApplication_Drone.Services
         {
             var onlineDrones = newDrones.Where(d => d.Status != DroneStatus.Offline).ToList();
 
+
             // 清空旧连接
             foreach (var drone in _drones)
                 drone.ConnectedDroneIds.Clear();
@@ -140,10 +167,16 @@ namespace WebApplication_Drone.Services
         /// <param name="drone">无人机实体</param>
         public void AddDrone(Drone drone)
         {
+            _logger.LogInformation("Attempting to add drone with Name: {DroneName}", drone.Name);
             lock (_lock)
             {
-                var existing = _drones.FirstOrDefault(d => d.Name == drone.Name);
-                if (existing != null) drone.Id = existing.Id;
+                var existingDrone = _drones.FirstOrDefault(d => d.Name == drone.Name);
+                if (existingDrone != null)
+                {
+                    // 保持相同ID
+                    drone.Id = existingDrone.Id;
+                    _logger.LogInformation("Drone with Name {DroneName} already exists. Re-assigning Id {DroneId}.", drone.Name, drone.Id);
+                }
 
                 if (!_drones.Any(d => d.Id == drone.Id))
                 {
@@ -158,6 +191,7 @@ namespace WebApplication_Drone.Services
                         neighbor.ConnectedDroneIds.Add(drone.Id);
 
                     _drones.Add(drone);
+
                     _sqlserverService.AddOrUpdateDroneAsync(drone);
                     OnDroneChanged("Add", drone);
                 }
@@ -170,6 +204,7 @@ namespace WebApplication_Drone.Services
         /// <returns>更新成功与否</returns>
         public bool UpdateDrone(Drone drone)
         {
+            _logger.LogInformation("Attempting to update drone with ID: {DroneId}", drone.Id);
             lock (_lock)
             {
                 var index = _drones.FindIndex(d => d.Id == drone.Id);
@@ -181,15 +216,24 @@ namespace WebApplication_Drone.Services
                 // 状态处理
                 if (drone.Status == DroneStatus.Offline)
                 {
-                    drone.AssignedSubTasks.Clear();
-                    // 断开所有连接
-                    foreach (var other in _drones)
-                        other.ConnectedDroneIds.Remove(drone.Id);
-                }
+                    _logger.LogInformation("Drone with ID: {DroneId} found. Updating.", drone.Id);
+                    _drones[idx] = drone;
 
-                _sqlserverService.AddOrUpdateDroneAsync(drone);
-                OnDroneChanged("Update", drone);
-                return true;
+                    if (drone.Status == DroneStatus.Offline)
+                    {
+                        _logger.LogInformation("Drone {DroneId} is offline, clearing subtasks and firing 'Delete' event.", drone.Id);
+                        _drones[idx].AssignedSubTasks.Clear();
+                        OnDroneChanged("Delete", drone);
+                    }
+                    else
+                    {
+                        _logger.LogInformation("Drone {DroneId} status updated, firing 'Update' event.", drone.Id);
+                        OnDroneChanged("Update", drone);
+                    }
+                    return true;
+                }
+                _logger.LogWarning("Update failed. Drone with ID: {DroneId} not found.", drone.Id);
+                return false;
             }
         }
         /// <summary>
@@ -199,14 +243,18 @@ namespace WebApplication_Drone.Services
         /// <returns>删除成功与否</returns>
         public bool DeleteDrone(Guid id)
         {
+            _logger.LogInformation("Attempting to delete drone with ID: {DroneId}", id);
             lock (_lock)
             {
                 var drone = _drones.FirstOrDefault(d => d.Id == id);
                 if (drone != null)
                 {
                     _drones.Remove(drone);
+                    OnDroneChanged("Delete", drone);
+                    _logger.LogInformation("Successfully deleted drone with ID: {DroneId}", id);
                     return true;
                 }
+                _logger.LogWarning("Delete failed. Drone with ID: {DroneId} not found.", id);
                 return false;
             }
         }
@@ -215,6 +263,7 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public List<SubTask> GetSubTasks(Guid droneId)
         {
+            _logger.LogInformation("Getting all subtasks for drone {DroneId}", droneId);
             lock (_lock)
             {
                 var drone = _drones.FirstOrDefault(d => d.Id == droneId);
@@ -226,6 +275,7 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public SubTask? GetSubTask(Guid droneId, Guid subTaskId)
         {
+            _logger.LogInformation("Getting subtask {SubTaskId} for drone {DroneId}", subTaskId, droneId);
             lock (_lock)
             {
                 var drone = _drones.FirstOrDefault(d => d.Id == droneId);
@@ -237,15 +287,22 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public bool AddSubTask(Guid droneId, SubTask subTask)
         {
+            _logger.LogInformation("Attempting to add subtask {SubTaskId} to drone {DroneId}", subTask.Id, droneId);
             lock (_lock)
             {
                 var drone = _drones.FirstOrDefault(d => d.Id == droneId);
-                if (drone == null) return false;
+                if (drone == null)
+                {
+                    _logger.LogWarning("AddSubTask failed. Drone with ID: {DroneId} not found.", droneId);
+                    return false;
+                }
                 if (!drone.AssignedSubTasks.Any(st => st.Id == subTask.Id))
                 {
                     drone.AssignedSubTasks.Add(subTask);
+                    _logger.LogInformation("Successfully added subtask {SubTaskId} to drone {DroneId}", subTask.Id, droneId);
                     return true;
                 }
+                _logger.LogWarning("AddSubTask failed. Subtask with ID: {SubTaskId} already exists on drone {DroneId}.", subTask.Id, droneId);
                 return false;
             }
         }
@@ -254,16 +311,23 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public bool UpdateSubTask(Guid droneId, SubTask subTask)
         {
+            _logger.LogInformation("Attempting to update subtask {SubTaskId} on drone {DroneId}", subTask.Id, droneId);
             lock (_lock)
             {
                 var drone = _drones.FirstOrDefault(d => d.Id == droneId);
-                if (drone == null) return false;
+                if (drone == null)
+                {
+                    _logger.LogWarning("UpdateSubTask failed. Drone with ID: {DroneId} not found.", droneId);
+                    return false;
+                }
                 var idx = drone.AssignedSubTasks.FindIndex(st => st.Id == subTask.Id);
                 if (idx >= 0)
                 {
                     drone.AssignedSubTasks[idx] = subTask;
+                    _logger.LogInformation("Successfully updated subtask {SubTaskId} on drone {DroneId}", subTask.Id, droneId);
                     return true;
                 }
+                _logger.LogWarning("UpdateSubTask failed. Subtask with ID: {SubTaskId} not found on drone {DroneId}.", subTask.Id, droneId);
                 return false;
             }
         }
@@ -272,16 +336,23 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public bool RemoveSubTask(Guid droneId, Guid subTaskId)
         {
+            _logger.LogInformation("Attempting to remove subtask {SubTaskId} from drone {DroneId}", subTaskId, droneId);
             lock (_lock)
             {
                 var drone = _drones.FirstOrDefault(d => d.Id == droneId);
-                if (drone == null) return false;
+                if (drone == null)
+                {
+                    _logger.LogWarning("RemoveSubTask failed. Drone with ID: {DroneId} not found.", droneId);
+                    return false;
+                }
                 var subTask = drone.AssignedSubTasks.FirstOrDefault(st => st.Id == subTaskId);
                 if (subTask != null)
                 {
                     drone.AssignedSubTasks.Remove(subTask);
+                    _logger.LogInformation("Successfully removed subtask {SubTaskId} from drone {DroneId}", subTaskId, droneId);
                     return true;
                 }
+                _logger.LogWarning("RemoveSubTask failed. Subtask with ID: {SubTaskId} not found on drone {DroneId}.", subTaskId, droneId);
                 return false;
             }
         }

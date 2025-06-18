@@ -37,6 +37,7 @@ namespace WebApplication_Drone.Services
         {
 
             _taskDataService = taskDataService;
+            
             _taskDataService.TaskChanged += OnTaskChanged;
             _droneDataService = droneDataService;
             _droneDataService.DroneChanged += OnDroneChanged;
@@ -339,8 +340,9 @@ namespace WebApplication_Drone.Services
                     case "reassign_info":
                         HandleReassig_info(message.content);
                         break;
-
-
+                    case "task_info":
+                        HandleTaskInfo(message.content);
+                        break;
                     default:
                         Console.WriteLine($"未知消息类型: {message.type}");
                         break;
@@ -351,6 +353,16 @@ namespace WebApplication_Drone.Services
                 Console.WriteLine($"处理消息时发生错误: {ex.Message}");
             }
         }
+        /// <summary>
+        /// 任务完成
+        /// </summary>
+        /// <param name="content"></param>
+        private void HandleTaskInfo(Dictionary<string, List<object>> content)
+        {
+
+            _taskDataService.CompleteSubTask(Guid.Parse(((string)content["subtask_name"][0]).Split("_")[0]), ((string)content["subtask_name"][0]));
+        }
+
         /// <summary>
         /// 处理重新分配信息
         /// </summary>
@@ -408,14 +420,12 @@ namespace WebApplication_Drone.Services
         {
             foreach (var item in content)
             {
-                foreach (var mission in item.Value)
+                foreach (var subTask in item.Value)
                 {
-                    var missionItem = new MainTask
-                    {
-                        Id = Guid.NewGuid(),
-                        Description = ((JsonElement)mission).GetString(),
-                        Status = TaskStatus.WaitingForActivation,
-                    };
+                    string[] s = ((JsonElement)subTask).GetString().Split('_');
+                    // 将子任务分配到无人机
+                    _taskDataService.AssignSubTask(Guid.Parse(s[0]), ((JsonElement)subTask).GetString(), item.Key);
+                    //_logger.LogInformation($"从Socket接收并添加新任务: {missionItem.Description}, ID: {missionItem.Id}");
                 }
             }
         }
@@ -432,9 +442,12 @@ namespace WebApplication_Drone.Services
                     SubTask mission = new SubTask
                     {
                         Description = kvp.Value[i].ToString(),
-                        Status = TaskStatus.WaitingForActivation,
+                        Status = TaskStatus.WaitingForActivation, // 使用明确的别名
                     };
                     string[] sArray = kvp.Key.Split('_');
+
+                    ///起一个子任务装载到主任务的服务 sarray[0]
+                    _taskDataService.addSubTasks(Guid.Parse(sArray[0]), mission);
                 }
             }
         }
@@ -472,7 +485,7 @@ namespace WebApplication_Drone.Services
             // 提取各属性
             var nodesName = content["nodes_name"].ConvertAll(x => ((JsonElement)x).GetString());
             var dealSpeed = content["deal_speed"].ConvertAll(x => ((JsonElement)x).GetDouble());
-            var radius = content["radius"].ConvertAll(x => ((JsonElement)x).GetDouble());
+            //var radius = content["radius"].ConvertAll(x => ((JsonElement)x).GetDouble());
             var memory = content["memory"].ConvertAll(x => ((JsonElement)x).GetDouble());
             var leftBandwidth = content["left_bandwidth"].ConvertAll(x => ((JsonElement)x).GetDouble());
             var x = content["x"].ConvertAll(x => ((JsonElement)x).GetDouble());
@@ -493,7 +506,7 @@ namespace WebApplication_Drone.Services
                     cpu_used_rate = cpuUsedRate[i],
                     memory = memory[i],
                     left_bandwidth = leftBandwidth[i],
-                    radius = radius[i]
+                    //radius = radius[i]
                 });
             }
                 
@@ -520,7 +533,8 @@ namespace WebApplication_Drone.Services
         /// <param name="e"></param>
         private void OnDroneChanged(object? sender, DroneChangedEventArgs e)
         {
-            if (sender == "Delete")
+
+            if (e.Action == "Delete")
             {
                 // 删除无人机的处理逻辑
                 _logger.LogInformation($"无人机 {e.Drone.Name} 已被删除。");
@@ -530,12 +544,12 @@ namespace WebApplication_Drone.Services
                     type = "shutdown"
                 });
             }
-            else if (sender == "Update")
+            else if (e.Action == "Update")
             {
                 // 更新无人机的处理逻辑
                 _logger.LogInformation($"无人机 {e.Drone.Name} 状态已更新为 {e.Drone.Status}。");
             }
-            else if (sender == "Add")
+            else if (e.Action == "Add")
             {
                 // 添加无人机的处理逻辑
                 _logger.LogInformation($"新无人机 {e.Drone.Name} 已添加。");
@@ -543,7 +557,7 @@ namespace WebApplication_Drone.Services
             else
             { }
 
-            }
+        }
         /// <summary>
         /// 无人机变更事件处理
         /// </summary>
@@ -551,18 +565,18 @@ namespace WebApplication_Drone.Services
         /// <param name="e"></param>
         private void OnTaskChanged(object? sender, TaskChangedEventArgs e)
         {
-            if (sender == "Delete")
+            if (e.Action == "Delete")
             {
-             
+
                 // 删除任务的处理逻辑
                 _logger.LogInformation($"任务 {e.MainTask.Description} 已被删除。");
             }
-            else if (sender == "Update")
+            else if (e.Action == "Update")
             {
                 // 更新任务的处理逻辑
                 _logger.LogInformation($"任务 {e.MainTask.Description} 状态已更新。");
             }
-            else if (sender == "Add")
+            else if (e.Action == "add")
             {
                 SendMessageAsync(new Message_Send
                 {
