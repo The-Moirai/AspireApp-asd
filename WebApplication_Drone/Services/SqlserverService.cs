@@ -13,10 +13,11 @@ namespace WebApplication_Drone.Services
         private readonly string connectionString;
         private readonly SqlConnection _connection;
         private readonly ILogger<SqlserverService> _logger;
-        public SqlserverService()
+        public SqlserverService(ILogger<SqlserverService> logger)
         {
             connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__app-db");
             _connection = new SqlConnection(connectionString);
+            _logger = logger;
 
         }
         public void run()
