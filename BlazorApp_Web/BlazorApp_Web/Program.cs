@@ -23,7 +23,8 @@ builder.Services.AddHttpClient("ApiService", client =>
 {
     client.BaseAddress = new Uri("https://apisercie-drone/"); // Aspire 服务名或实际API地址
 });
-
+// 添加数据服务
+builder.Services.AddScoped<HistoryApiService>();
 //数据定时推送服务
 builder.Services.AddHostedService<DronePushBackgroundService>();
 var app = builder.Build();

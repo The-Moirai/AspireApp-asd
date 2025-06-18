@@ -18,6 +18,7 @@ namespace WebApplication_Drone.Services
             connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__app-db");
             _connection = new SqlConnection(connectionString);
             _logger = logger;
+            _logger.LogDebug(connectionString);
 
         }
         public void run()

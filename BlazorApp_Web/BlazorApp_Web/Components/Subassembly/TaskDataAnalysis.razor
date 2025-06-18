@@ -118,7 +118,7 @@
     // 数据属性和方法...
     private void LoadData()
     {
-        var request = new DroneDataRequest { model = 1, drone = Int32.Parse(SelectedDroneId), timeSpan = TimeSpan.FromHours(Hours) };
+        var request = new DroneDataRequest { model = 1, drone = Guid.Parse(SelectedDroneId), timeSpan = TimeSpan.FromHours(Hours) };
         // 填充请求参数
         OnDataLoaded.InvokeAsync(request);
     }
