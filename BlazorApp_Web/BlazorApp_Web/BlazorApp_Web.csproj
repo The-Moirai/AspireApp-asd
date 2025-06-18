@@ -7,9 +7,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\BlazorApp_Web.Client\BlazorApp_Web.Client.csproj" />
     <ProjectReference Include="..\..\AspireApp.ServiceDefaults\AspireApp.ServiceDefaults.csproj" />
     <ProjectReference Include="..\..\ClassLibrary_Core\ClassLibrary_Core.csproj" />
-    <ProjectReference Include="..\BlazorApp_Web.Client\BlazorApp_Web.Client.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="9.0.6" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.6" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Common" Version="9.0.6" />

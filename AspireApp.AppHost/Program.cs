@@ -1,6 +1,7 @@
 var builder = DistributedApplication.CreateBuilder(args);
 
 var cache = builder.AddRedis("cache");
+// Êý¾Ý¿âÌí¼Ó
 
 var apiService=builder.AddProject<Projects.WebApplication_Drone>("apisercie-drone")
     .WithExternalHttpEndpoints()

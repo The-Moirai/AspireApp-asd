@@ -1,8 +1,10 @@
 ﻿@page "/drone_map"
-@rendermode InteractiveAuto
+@rendermode InteractiveServer
 @using ClassLibrary_Core.Drone
 @using Microsoft.AspNetCore.SignalR.Client
+@using Microsoft.Extensions.Logging
 @inject NavigationManager Navigation
+@inject ILogger<Drone_Map> Logger
 <h3>Drone_Map</h3>
 @if (drones == null)
 {
@@ -19,12 +21,15 @@ else
                     var current = drone;
                     @foreach (var adjId in current.ConnectedDroneIds)
                     {
-                        var adjacent = drones.FirstOrDefault(d => d.Id == adjId);
-                        @if (adjacent?.CurrentPosition != null)
+                        if (!showOnlyConnected || visibleDroneIds.Contains(adjId))
                         {
-                            <line x1="@current.CurrentPosition.Latitude_x" y1="@current.CurrentPosition.Longitude_y"
-                                  x2="@adjacent.CurrentPosition.Latitude_x" y2="@adjacent.CurrentPosition.Longitude_y"
-                                  stroke="orange" stroke-width="2" />
+                            var adjacent = drones.FirstOrDefault(d => d.Id == adjId);
+                            if (adjacent?.CurrentPosition != null)
+                            {
+                                <line x1="@current.CurrentPosition.Latitude_x" y1="@current.CurrentPosition.Longitude_y"
+                                      x2="@adjacent.CurrentPosition.Latitude_x" y2="@adjacent.CurrentPosition.Longitude_y"
+                                      stroke="orange" stroke-width="2" />
+                            }
                         }
                     }
                 }
@@ -157,7 +162,7 @@ else
         DroneStatus.InMission => "green",
         DroneStatus.Returning => "blue",
         DroneStatus.Maintenance => "orange",
-        DroneStatus.Offline => "black",
+        DroneStatus.Offline => "yellow",
         DroneStatus.Emergency => "red",
         _ => "gray"
     };
@@ -181,9 +186,29 @@ else
     /// <param name="droneId"></param>
     public void StopDrone()
     {
-        if (SelectedDrone != null && hubConnection is not null && hubConnection.State == HubConnectionState.Connected)
+        Logger.LogInformation("StopDrone 方法被调用。");
+        if (hubConnection is null)
         {
+            Logger.LogInformation("HubConnection is null.");
+            return;
+        }
+        Logger.LogInformation("当前的 HubConnection 状态: {State}", hubConnection.State);
+
+        if (SelectedDrone != null && hubConnection.State == HubConnectionState.Connected)
+        {
+            Logger.LogInformation("正在为无人机 {DroneId} 调用 SetDroneOffline。", SelectedDrone.Id);
             hubConnection.InvokeAsync("SetDroneOffline", SelectedDrone.Id);
+        }
+        else
+        {
+            if (SelectedDrone == null)
+            {
+                Logger.LogInformation("未选择任何无人机。");
+            }
+            if (hubConnection.State != HubConnectionState.Connected)
+            {
+                Logger.LogInformation("HubConnection 未连接。");
+            }
         }
     }
 

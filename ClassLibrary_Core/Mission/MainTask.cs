@@ -13,7 +13,7 @@
         /// <summary>
         /// 大任务的状态
         /// </summary>
-        public TaskStatus Status { get; set; }
+        public System.Threading.Tasks.TaskStatus Status { get; set; }
         /// <summary>
         /// 大任务的创建时间
         /// </summary>
@@ -25,6 +25,8 @@
         /// <summary>
         /// 大任务的子任务列表
         /// </summary>
+
+        /// 防止序列化时循环引用
         public List<SubTask> SubTasks { get; set; } = new();
     }
 }

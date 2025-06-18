@@ -37,7 +37,7 @@ namespace BlazorApp_Web.Service
                     _logger.LogError(ex, "推送无人机数据时发生异常");
                 }
 
-                await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken); // 每5秒推送一次
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); // 每5秒推送一次，降低CPU占用
             }
         }
 

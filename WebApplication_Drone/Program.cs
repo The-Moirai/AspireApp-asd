@@ -32,6 +32,7 @@ builder.Services.AddSwaggerGen(c =>
 //Api测试时需将socket服务及socket连接服务器的后台服务注释掉
 //socket连接服务器
 builder.Services.AddSingleton<SocketService>();
+builder.Services.AddSingleton<MissionSocketService>();
 //socket连接服务器的后台服务
 builder.Services.AddHostedService<SocketBackgroundService>();
 // 添加数据服务
