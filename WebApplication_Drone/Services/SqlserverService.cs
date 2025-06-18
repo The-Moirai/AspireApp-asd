@@ -18,7 +18,7 @@ namespace WebApplication_Drone.Services
             connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__app-db");
             _connection = new SqlConnection(connectionString);
             _logger = logger;
-            _logger.LogDebug(connectionString);
+            _logger.LogInformation(connectionString);
 
         }
         public void run()
@@ -84,22 +84,25 @@ namespace WebApplication_Drone.Services
         // 异步添加/更新无人机
         public async Task AddOrUpdateDroneAsync(Drone drone, SqlTransaction? transaction = null)
         {
-            var sql = DroneExistsAsync(drone.Id).Result
-                ? @"UPDATE Drones SET Status=@status, LastHeartbeat=@now, 
-                  PositionX=@x, PositionY=@y WHERE Id=@id"
-                : @"INSERT INTO Drones (Id, DroneId, Status, LastHeartbeat, PositionX, PositionY) 
-               VALUES (@id, @name, @status, @now, @x, @y)";
+            var exists = await DroneExistsAsync(drone.Id);
+            var sql = exists
+                ? @"UPDATE Drones SET 
+                    DroneId=@name, 
+                    ModelType=@modelType, 
+                    LastHeartbeat=@now 
+                    WHERE Id=@id"
+                : @"INSERT INTO Drones (Id, DroneId, ModelType, RegistrationDate, LastHeartbeat) 
+                   VALUES (@id, @name, @modelType, @registrationDate, @now)";
 
             using var cmd = new SqlCommand(sql, _connection, transaction);
             cmd.Parameters.AddRange(new[]
             {
-            new SqlParameter("@id", drone.Id),
-            new SqlParameter("@name", drone.Name),
-            new SqlParameter("@status", (int)drone.Status),
-            new SqlParameter("@now", DateTime.UtcNow),
-            new SqlParameter("@x", drone.CurrentPosition.Latitude_x),
-            new SqlParameter("@y", drone.CurrentPosition.Longitude_y)
-        });
+                new SqlParameter("@id", drone.Id),
+                new SqlParameter("@name", drone.Name),
+                new SqlParameter("@modelType", drone.ModelStatus.ToString()),
+                new SqlParameter("@registrationDate", exists ? (object)DBNull.Value : DateTime.UtcNow),
+                new SqlParameter("@now", DateTime.UtcNow)
+            });
 
             await cmd.ExecuteNonQueryAsync();
         }
@@ -128,9 +131,9 @@ namespace WebApplication_Drone.Services
                 {
                     DroneId = droneId,
                     Timestamp = reader.GetDateTime(reader.GetOrdinal("Timestamp")),
-                    cpuUsage = reader.GetDouble(reader.GetOrdinal("CpuUsage")),
-                    Latitude = reader.GetDouble(reader.GetOrdinal("Latitude")),
-                    Longitude = reader.GetDouble(reader.GetOrdinal("Longitude"))
+                    cpuUsage = Convert.ToDecimal(reader["CpuUsage"]),
+                    Latitude = Convert.ToDecimal(reader["Latitude"]),
+                    Longitude = Convert.ToDecimal(reader["Longitude"])
                 });
             }
             return results;
@@ -150,7 +153,8 @@ namespace WebApplication_Drone.Services
             new SqlParameter("@Id", drone.Id),
             new SqlParameter("@DroneId", drone.Name),
             new SqlParameter("@ModelType", drone.ModelStatus.ToString()),
-            new SqlParameter("@RegistrationDate", DateTime.Now)
+            new SqlParameter("@RegistrationDate", DateTime.UtcNow),
+            new SqlParameter("@LastHeartbeat", DateTime.UtcNow)
         };
 
             ExecuteNonQuery(sql, parameters);
@@ -162,6 +166,142 @@ namespace WebApplication_Drone.Services
         {
             var sql = "UPDATE Drones SET LastHeartbeat = GETUTCDATE() WHERE Id = @Id";
             ExecuteNonQuery(sql, new SqlParameter("@Id", droneId));
+        }
+
+        /// <summary>
+        /// 获取所有无人机基本信息
+        /// </summary>
+        /// <returns>无人机基本信息列表</returns>
+        public async Task<List<Drone>> GetAllDronesAsync()
+        {
+            var drones = new List<Drone>();
+            var sql = "SELECT Id, DroneId, ModelType, RegistrationDate, LastHeartbeat FROM Drones";
+
+            try
+            {
+                using var cmd = new SqlCommand(sql, _connection);
+                using var reader = await cmd.ExecuteReaderAsync();
+
+                while (await reader.ReadAsync())
+                {
+                    var drone = new Drone
+                    {
+                        Id = reader.GetGuid(reader.GetOrdinal("Id")),
+                        Name = reader.GetString(reader.GetOrdinal("DroneId")),
+                        ModelStatus = Enum.Parse<ModelStatus>(reader.GetString(reader.GetOrdinal("ModelType")))
+                    };
+                    drones.Add(drone);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting all drones");
+            }
+
+            return drones;
+        }
+
+        /// <summary>
+        /// 获取指定无人机的基本信息
+        /// </summary>
+        /// <param name="droneId">无人机ID</param>
+        /// <returns>无人机基本信息</returns>
+        public async Task<Drone?> GetDroneAsync(Guid droneId)
+        {
+            var sql = "SELECT Id, DroneId, ModelType, RegistrationDate, LastHeartbeat FROM Drones WHERE Id = @Id";
+
+            try
+            {
+                using var cmd = new SqlCommand(sql, _connection);
+                cmd.Parameters.AddWithValue("@Id", droneId);
+                using var reader = await cmd.ExecuteReaderAsync();
+
+                if (await reader.ReadAsync())
+                {
+                    return new Drone
+                    {
+                        Id = reader.GetGuid(reader.GetOrdinal("Id")),
+                        Name = reader.GetString(reader.GetOrdinal("DroneId")),
+                        ModelStatus = Enum.Parse<ModelStatus>(reader.GetString(reader.GetOrdinal("ModelType")))
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting drone {DroneId}", droneId);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 完整同步无人机数据（基本信息 + 状态历史）
+        /// </summary>
+        /// <param name="drone">无人机对象</param>
+        public async Task FullSyncDroneAsync(Drone drone)
+        {
+            using var transaction = _connection.BeginTransaction();
+            try
+            {
+                // 1. 更新基本信息
+                await AddOrUpdateDroneAsync(drone, transaction);
+
+                // 2. 记录状态历史（如果不是离线状态）
+                if (drone.Status != DroneStatus.Offline)
+                {
+                    var statusSql = @"
+                    INSERT INTO DroneStatusHistory (DroneId, Status, Timestamp, CpuUsage, BandwidthAvailable, MemoryUsage, Latitude, Longitude)
+                    VALUES (@DroneId, @Status, @Timestamp, @CpuUsage, @BandwidthAvailable, @MemoryUsage, @Latitude, @Longitude)";
+
+                    using var statusCmd = new SqlCommand(statusSql, _connection, transaction);
+                    statusCmd.Parameters.AddRange(new[]
+                    {
+                        new SqlParameter("@DroneId", drone.Id),
+                        new SqlParameter("@Status", (int)drone.Status),
+                        new SqlParameter("@Timestamp", DateTime.UtcNow),
+                        new SqlParameter("@CpuUsage", (decimal)drone.cpu_used_rate),
+                        new SqlParameter("@BandwidthAvailable", (decimal)drone.left_bandwidth),
+                        new SqlParameter("@MemoryUsage", (decimal)drone.memory),
+                        new SqlParameter("@Latitude", drone.CurrentPosition?.Latitude_x ?? (object)DBNull.Value),
+                        new SqlParameter("@Longitude", drone.CurrentPosition?.Longitude_y ?? (object)DBNull.Value)
+                    });
+                    await statusCmd.ExecuteNonQueryAsync();
+                }
+
+                // 3. 同步子任务关联
+                if (drone.AssignedSubTasks.Any())
+                {
+                    // 停用当前无人机的所有任务分配
+                    var deactivateSql = "UPDATE DroneSubTasks SET IsActive = 0 WHERE DroneId = @DroneId";
+                    using var deactivateCmd = new SqlCommand(deactivateSql, _connection, transaction);
+                    deactivateCmd.Parameters.AddWithValue("@DroneId", drone.Id);
+                    await deactivateCmd.ExecuteNonQueryAsync();
+
+                    // 添加新的任务分配
+                    foreach (var subTask in drone.AssignedSubTasks)
+                    {
+                        var insertSql = @"
+                        INSERT INTO DroneSubTasks (DroneId, SubTaskId, AssignmentTime, IsActive)
+                        VALUES (@DroneId, @SubTaskId, @AssignmentTime, 1)";
+
+                        using var insertCmd = new SqlCommand(insertSql, _connection, transaction);
+                        insertCmd.Parameters.AddRange(new[]
+                        {
+                            new SqlParameter("@DroneId", drone.Id),
+                            new SqlParameter("@SubTaskId", subTask.Id),
+                            new SqlParameter("@AssignmentTime", DateTime.UtcNow)
+                        });
+                        await insertCmd.ExecuteNonQueryAsync();
+                    }
+                }
+
+                transaction.Commit();
+            }
+            catch
+            {
+                transaction.Rollback();
+                throw;
+            }
         }
 
         // 添加主任务
@@ -213,6 +353,292 @@ namespace WebApplication_Drone.Services
             return subTask.Id;
         }
 
+        /// <summary>
+        /// 异步添加子任务
+        /// </summary>
+        public async Task<Guid> AddSubTaskAsync(SubTask subTask)
+        {
+            subTask.Id = Guid.NewGuid();
+            subTask.CreationTime = DateTime.UtcNow;
+
+            var sql = @"
+            INSERT INTO SubTasks (Id, Description, Status, CreationTime, CompletedTime, ParentTaskId, ReassignmentCount)
+            VALUES (@Id, @Description, @Status, @CreationTime, @CompletedTime, @ParentTaskId, @ReassignmentCount)";
+
+            using var cmd = new SqlCommand(sql, _connection);
+            cmd.Parameters.AddRange(new[]
+            {
+                new SqlParameter("@Id", subTask.Id),
+                new SqlParameter("@Description", subTask.Description),
+                new SqlParameter("@Status", (int)subTask.Status),
+                new SqlParameter("@CreationTime", subTask.CreationTime),
+                new SqlParameter("@CompletedTime", subTask.CompletedTime ?? (object)DBNull.Value),
+                new SqlParameter("@ParentTaskId", subTask.ParentTask),
+                new SqlParameter("@ReassignmentCount", subTask.ReassignmentCount)
+            });
+
+            await cmd.ExecuteNonQueryAsync();
+            return subTask.Id;
+        }
+
+        /// <summary>
+        /// 更新主任务
+        /// </summary>
+        public async Task UpdateMainTaskAsync(MainTask task)
+        {
+            var sql = @"
+            UPDATE MainTasks 
+            SET Description = @Description, 
+                Status = @Status, 
+                CompletedTime = @CompletedTime 
+            WHERE Id = @Id";
+
+            using var cmd = new SqlCommand(sql, _connection);
+            cmd.Parameters.AddRange(new[]
+            {
+                new SqlParameter("@Id", task.Id),
+                new SqlParameter("@Description", task.Description),
+                new SqlParameter("@Status", (int)task.Status),
+                new SqlParameter("@CompletedTime", task.CompletedTime ?? (object)DBNull.Value)
+            });
+
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        /// <summary>
+        /// 删除主任务（级联删除子任务）
+        /// </summary>
+        public async Task DeleteMainTaskAsync(Guid taskId)
+        {
+            var sql = "DELETE FROM MainTasks WHERE Id = @Id";
+            using var cmd = new SqlCommand(sql, _connection);
+            cmd.Parameters.AddWithValue("@Id", taskId);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        /// <summary>
+        /// 更新子任务
+        /// </summary>
+        public async Task UpdateSubTaskAsync(SubTask subTask)
+        {
+            var sql = @"
+            UPDATE SubTasks 
+            SET Description = @Description,
+                Status = @Status,
+                AssignedTime = @AssignedTime,
+                CompletedTime = @CompletedTime,
+                ReassignmentCount = @ReassignmentCount
+            WHERE Id = @Id";
+
+            using var cmd = new SqlCommand(sql, _connection);
+            cmd.Parameters.AddRange(new[]
+            {
+                new SqlParameter("@Id", subTask.Id),
+                new SqlParameter("@Description", subTask.Description),
+                new SqlParameter("@Status", (int)subTask.Status),
+                new SqlParameter("@AssignedTime", subTask.AssignedTime ?? (object)DBNull.Value),
+                new SqlParameter("@CompletedTime", subTask.CompletedTime ?? (object)DBNull.Value),
+                new SqlParameter("@ReassignmentCount", subTask.ReassignmentCount)
+            });
+
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        /// <summary>
+        /// 获取所有主任务
+        /// </summary>
+        public async Task<List<MainTask>> GetAllMainTasksAsync()
+        {
+            var tasks = new List<MainTask>();
+            var sql = "SELECT Id, Description, Status, CreationTime, CompletedTime, CreatedBy FROM MainTasks ORDER BY CreationTime DESC";
+
+            try
+            {
+                using var cmd = new SqlCommand(sql, _connection);
+                using var reader = await cmd.ExecuteReaderAsync();
+
+                while (await reader.ReadAsync())
+                {
+                    var task = new MainTask
+                    {
+                        Id = reader.GetGuid(reader.GetOrdinal("Id")),
+                        Description = reader.GetString(reader.GetOrdinal("Description")),
+                        Status = (TaskStatus)reader.GetByte(reader.GetOrdinal("Status")),
+                        CreationTime = reader.GetDateTime(reader.GetOrdinal("CreationTime")),
+                        CompletedTime = reader.IsDBNull(reader.GetOrdinal("CompletedTime")) ? null : reader.GetDateTime(reader.GetOrdinal("CompletedTime"))
+                    };
+                    tasks.Add(task);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting all main tasks");
+            }
+
+            return tasks;
+        }
+
+        /// <summary>
+        /// 获取主任务的所有子任务
+        /// </summary>
+        public async Task<List<SubTask>> GetSubTasksByParentAsync(Guid parentTaskId)
+        {
+            var subTasks = new List<SubTask>();
+            var sql = "SELECT Id, Description, Status, CreationTime, AssignedTime, CompletedTime, ParentTaskId, ReassignmentCount FROM SubTasks WHERE ParentTaskId = @ParentTaskId ORDER BY CreationTime";
+
+            try
+            {
+                using var cmd = new SqlCommand(sql, _connection);
+                cmd.Parameters.AddWithValue("@ParentTaskId", parentTaskId);
+                using var reader = await cmd.ExecuteReaderAsync();
+
+                while (await reader.ReadAsync())
+                {
+                    var subTask = new SubTask
+                    {
+                        Id = reader.GetGuid(reader.GetOrdinal("Id")),
+                        Description = reader.GetString(reader.GetOrdinal("Description")),
+                        Status = (TaskStatus)reader.GetByte(reader.GetOrdinal("Status")),
+                        CreationTime = reader.GetDateTime(reader.GetOrdinal("CreationTime")),
+                        AssignedTime = reader.IsDBNull(reader.GetOrdinal("AssignedTime")) ? null : reader.GetDateTime(reader.GetOrdinal("AssignedTime")),
+                        CompletedTime = reader.IsDBNull(reader.GetOrdinal("CompletedTime")) ? null : reader.GetDateTime(reader.GetOrdinal("CompletedTime")),
+                        ParentTask = reader.GetGuid(reader.GetOrdinal("ParentTaskId")),
+                        ReassignmentCount = reader.GetInt32(reader.GetOrdinal("ReassignmentCount"))
+                    };
+                    subTasks.Add(subTask);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting subtasks for parent {ParentTaskId}", parentTaskId);
+            }
+
+            return subTasks;
+        }
+
+        /// <summary>
+        /// 完整同步主任务及其子任务
+        /// </summary>
+        public async Task FullSyncMainTaskAsync(MainTask mainTask)
+        {
+            using var transaction = _connection.BeginTransaction();
+            try
+            {
+                // 1. 更新或插入主任务
+                var existsTask = await GetMainTaskExistsAsync(mainTask.Id, transaction);
+                if (existsTask)
+                {
+                    var updateSql = @"
+                    UPDATE MainTasks 
+                    SET Description = @Description, Status = @Status, CompletedTime = @CompletedTime 
+                    WHERE Id = @Id";
+
+                    using var updateCmd = new SqlCommand(updateSql, _connection, transaction);
+                    updateCmd.Parameters.AddRange(new[]
+                    {
+                        new SqlParameter("@Id", mainTask.Id),
+                        new SqlParameter("@Description", mainTask.Description),
+                        new SqlParameter("@Status", (int)mainTask.Status),
+                        new SqlParameter("@CompletedTime", mainTask.CompletedTime ?? (object)DBNull.Value)
+                    });
+                    await updateCmd.ExecuteNonQueryAsync();
+                }
+                else
+                {
+                    var insertSql = @"
+                    INSERT INTO MainTasks (Id, Description, Status, CreationTime, CompletedTime, CreatedBy)
+                    VALUES (@Id, @Description, @Status, @CreationTime, @CompletedTime, @CreatedBy)";
+
+                    using var insertCmd = new SqlCommand(insertSql, _connection, transaction);
+                    insertCmd.Parameters.AddRange(new[]
+                    {
+                        new SqlParameter("@Id", mainTask.Id),
+                        new SqlParameter("@Description", mainTask.Description),
+                        new SqlParameter("@Status", (int)mainTask.Status),
+                        new SqlParameter("@CreationTime", mainTask.CreationTime),
+                        new SqlParameter("@CompletedTime", mainTask.CompletedTime ?? (object)DBNull.Value),
+                        new SqlParameter("@CreatedBy", "System")
+                    });
+                    await insertCmd.ExecuteNonQueryAsync();
+                }
+
+                // 2. 同步子任务
+                foreach (var subTask in mainTask.SubTasks)
+                {
+                    var existsSubTask = await GetSubTaskExistsAsync(subTask.Id, transaction);
+                    if (existsSubTask)
+                    {
+                        var updateSubSql = @"
+                        UPDATE SubTasks 
+                        SET Description = @Description, Status = @Status, AssignedTime = @AssignedTime, 
+                            CompletedTime = @CompletedTime, ReassignmentCount = @ReassignmentCount
+                        WHERE Id = @Id";
+
+                        using var updateSubCmd = new SqlCommand(updateSubSql, _connection, transaction);
+                        updateSubCmd.Parameters.AddRange(new[]
+                        {
+                            new SqlParameter("@Id", subTask.Id),
+                            new SqlParameter("@Description", subTask.Description),
+                            new SqlParameter("@Status", (int)subTask.Status),
+                            new SqlParameter("@AssignedTime", subTask.AssignedTime ?? (object)DBNull.Value),
+                            new SqlParameter("@CompletedTime", subTask.CompletedTime ?? (object)DBNull.Value),
+                            new SqlParameter("@ReassignmentCount", subTask.ReassignmentCount)
+                        });
+                        await updateSubCmd.ExecuteNonQueryAsync();
+                    }
+                    else
+                    {
+                        var insertSubSql = @"
+                        INSERT INTO SubTasks (Id, Description, Status, CreationTime, AssignedTime, CompletedTime, ParentTaskId, ReassignmentCount)
+                        VALUES (@Id, @Description, @Status, @CreationTime, @AssignedTime, @CompletedTime, @ParentTaskId, @ReassignmentCount)";
+
+                        using var insertSubCmd = new SqlCommand(insertSubSql, _connection, transaction);
+                        insertSubCmd.Parameters.AddRange(new[]
+                        {
+                            new SqlParameter("@Id", subTask.Id),
+                            new SqlParameter("@Description", subTask.Description),
+                            new SqlParameter("@Status", (int)subTask.Status),
+                            new SqlParameter("@CreationTime", subTask.CreationTime),
+                            new SqlParameter("@AssignedTime", subTask.AssignedTime ?? (object)DBNull.Value),
+                            new SqlParameter("@CompletedTime", subTask.CompletedTime ?? (object)DBNull.Value),
+                            new SqlParameter("@ParentTaskId", mainTask.Id),
+                            new SqlParameter("@ReassignmentCount", subTask.ReassignmentCount)
+                        });
+                        await insertSubCmd.ExecuteNonQueryAsync();
+                    }
+                }
+
+                transaction.Commit();
+            }
+            catch
+            {
+                transaction.Rollback();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// 检查主任务是否存在
+        /// </summary>
+        private async Task<bool> GetMainTaskExistsAsync(Guid taskId, SqlTransaction transaction)
+        {
+            var sql = "SELECT 1 FROM MainTasks WHERE Id = @Id";
+            using var cmd = new SqlCommand(sql, _connection, transaction);
+            cmd.Parameters.AddWithValue("@Id", taskId);
+            return (await cmd.ExecuteScalarAsync()) != null;
+        }
+
+        /// <summary>
+        /// 检查子任务是否存在
+        /// </summary>
+        private async Task<bool> GetSubTaskExistsAsync(Guid subTaskId, SqlTransaction transaction)
+        {
+            var sql = "SELECT 1 FROM SubTasks WHERE Id = @Id";
+            using var cmd = new SqlCommand(sql, _connection, transaction);
+            cmd.Parameters.AddWithValue("@Id", subTaskId);
+            return (await cmd.ExecuteScalarAsync()) != null;
+        }
+
         // 记录无人机状态
         public void RecordDroneStatus(DroneStatusHistory status)
         {
@@ -239,6 +665,79 @@ namespace WebApplication_Drone.Services
             ExecuteNonQuery(sql, parameters);
         }
 
+        /// <summary>
+        /// 从Drone对象记录状态历史到DroneStatusHistory表
+        /// </summary>
+        /// <param name="drone">无人机对象</param>
+        public async Task RecordDroneStatusFromDroneAsync(Drone drone)
+        {
+            var sql = @"
+            INSERT INTO DroneStatusHistory (DroneId, Status, Timestamp, CpuUsage, BandwidthAvailable, MemoryUsage, Latitude, Longitude)
+            VALUES (@DroneId, @Status, @Timestamp, @CpuUsage, @BandwidthAvailable, @MemoryUsage, @Latitude, @Longitude)";
+
+            try
+            {
+                using var cmd = new SqlCommand(sql, _connection);
+                cmd.Parameters.AddRange(new[]
+                {
+                    new SqlParameter("@DroneId", drone.Id),
+                    new SqlParameter("@Status", (int)drone.Status),
+                    new SqlParameter("@Timestamp", DateTime.UtcNow),
+                    new SqlParameter("@CpuUsage", (decimal)drone.cpu_used_rate),
+                    new SqlParameter("@BandwidthAvailable", (decimal)drone.left_bandwidth),
+                    new SqlParameter("@MemoryUsage", (decimal)drone.memory),
+                    new SqlParameter("@Latitude", drone.CurrentPosition?.Latitude_x ?? (object)DBNull.Value),
+                    new SqlParameter("@Longitude", drone.CurrentPosition?.Longitude_y ?? (object)DBNull.Value)
+                });
+
+                await cmd.ExecuteNonQueryAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error recording drone status for drone {DroneId}", drone.Id);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// 批量记录无人机状态历史
+        /// </summary>
+        /// <param name="drones">无人机列表</param>
+        public async Task BulkRecordDroneStatusAsync(IEnumerable<Drone> drones)
+        {
+            using var transaction = _connection.BeginTransaction();
+            try
+            {
+                foreach (var drone in drones.Where(d => d.Status != DroneStatus.Offline))
+                {
+                    var sql = @"
+                    INSERT INTO DroneStatusHistory (DroneId, Status, Timestamp, CpuUsage, BandwidthAvailable, MemoryUsage, Latitude, Longitude)
+                    VALUES (@DroneId, @Status, @Timestamp, @CpuUsage, @BandwidthAvailable, @MemoryUsage, @Latitude, @Longitude)";
+
+                    using var cmd = new SqlCommand(sql, _connection, transaction);
+                    cmd.Parameters.AddRange(new[]
+                    {
+                        new SqlParameter("@DroneId", drone.Id),
+                        new SqlParameter("@Status", (int)drone.Status),
+                        new SqlParameter("@Timestamp", DateTime.UtcNow),
+                        new SqlParameter("@CpuUsage", (decimal)drone.cpu_used_rate),
+                        new SqlParameter("@BandwidthAvailable", (decimal)drone.left_bandwidth),
+                        new SqlParameter("@MemoryUsage", (decimal)drone.memory),
+                        new SqlParameter("@Latitude", drone.CurrentPosition?.Latitude_x ?? (object)DBNull.Value),
+                        new SqlParameter("@Longitude", drone.CurrentPosition?.Longitude_y ?? (object)DBNull.Value)
+                    });
+
+                    await cmd.ExecuteNonQueryAsync();
+                }
+                transaction.Commit();
+            }
+            catch
+            {
+                transaction.Rollback();
+                throw;
+            }
+        }
+
         // 分配子任务给无人机
         public void AssignSubTaskToDrone(Guid droneId, Guid subTaskId)
         {
@@ -262,6 +761,59 @@ namespace WebApplication_Drone.Services
 
             // 更新子任务状态
             UpdateSubTaskStatus(subTaskId, TaskStatus.WaitingToRun);
+        }
+
+        /// <summary>
+        /// 同步无人机的子任务关联到数据库
+        /// </summary>
+        /// <param name="drone">无人机对象</param>
+        public async Task SyncDroneSubTasksAsync(Drone drone)
+        {
+            using var transaction = _connection.BeginTransaction();
+            try
+            {
+                // 停用当前无人机的所有任务分配
+                var deactivateSql = "UPDATE DroneSubTasks SET IsActive = 0 WHERE DroneId = @DroneId";
+                using var deactivateCmd = new SqlCommand(deactivateSql, _connection, transaction);
+                deactivateCmd.Parameters.AddWithValue("@DroneId", drone.Id);
+                await deactivateCmd.ExecuteNonQueryAsync();
+
+                // 添加新的任务分配
+                foreach (var subTask in drone.AssignedSubTasks)
+                {
+                    var insertSql = @"
+                    INSERT INTO DroneSubTasks (DroneId, SubTaskId, AssignmentTime, IsActive)
+                    VALUES (@DroneId, @SubTaskId, @AssignmentTime, 1)";
+
+                    using var insertCmd = new SqlCommand(insertSql, _connection, transaction);
+                    insertCmd.Parameters.AddRange(new[]
+                    {
+                        new SqlParameter("@DroneId", drone.Id),
+                        new SqlParameter("@SubTaskId", subTask.Id),
+                        new SqlParameter("@AssignmentTime", DateTime.UtcNow)
+                    });
+                    await insertCmd.ExecuteNonQueryAsync();
+                }
+
+                transaction.Commit();
+            }
+            catch
+            {
+                transaction.Rollback();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// 批量同步所有无人机的子任务关联
+        /// </summary>
+        /// <param name="drones">无人机列表</param>
+        public async Task BulkSyncDroneSubTasksAsync(IEnumerable<Drone> drones)
+        {
+            foreach (var drone in drones)
+            {
+                await SyncDroneSubTasksAsync(drone);
+            }
         }
 
         // 更新子任务状态
@@ -498,9 +1050,9 @@ namespace WebApplication_Drone.Services
                     {
                         DroneId = droneId,
                         Timestamp = reader.GetDateTime(reader.GetOrdinal("Timestamp")),
-                        cpuUsage = reader.GetDouble(reader.GetOrdinal("CpuUsage")),
-                        Latitude = reader.GetDouble(reader.GetOrdinal("Latitude")),
-                        Longitude = reader.GetDouble(reader.GetOrdinal("Longitude"))
+                        cpuUsage = Convert.ToDecimal(reader["CpuUsage"]),
+                        Latitude = Convert.ToDecimal(reader["Latitude"]),
+                        Longitude = Convert.ToDecimal(reader["Longitude"])
                     });
                 }
             }
@@ -525,7 +1077,7 @@ namespace WebApplication_Drone.Services
         {
             const string sql = @"
             SELECT 
-                d.DroneName AS DroneId,
+                dsh.DroneId,
                 dsh.Timestamp,
                 dsh.CpuUsage,
                 dsh.Latitude,
@@ -535,9 +1087,8 @@ namespace WebApplication_Drone.Services
                 dsh.BatteryLevel,
                 dsh.NetworkStrength
             FROM DroneStatusHistory dsh
-            INNER JOIN Drones d ON dsh.DroneId = d.Id
             WHERE dsh.Timestamp BETWEEN @StartTime AND @EndTime
-            ORDER BY d.DroneName, dsh.Timestamp";
+            ORDER BY dsh.DroneId, dsh.Timestamp";
 
             var results = new List<DroneDataPoint>();
 
@@ -556,19 +1107,21 @@ namespace WebApplication_Drone.Services
                             {
                                 var dataPoint = new DroneDataPoint
                                 {
-                                    DroneId = reader.GetGuid(0),
-                                    Timestamp = (DateTime)reader["Timestamp"],
-                                    cpuUsage = Convert.ToDouble(reader["CpuUsage"]),
-                                    Latitude = reader.GetDouble(reader.GetOrdinal("Latitude")),
-                                    Longitude = reader.GetDouble(reader.GetOrdinal("Longitude"))
-                                };
+                                    DroneId = reader.GetGuid(reader.GetOrdinal("DroneId")),
+                                    Timestamp = reader.GetDateTime(reader.GetOrdinal("Timestamp")),
+                                    cpuUsage=reader.IsDBNull(reader.GetOrdinal("CpuUsage")) ? 0 : reader.GetOrdinal("CpuUsage"),
+                                    Latitude = reader.IsDBNull(reader.GetOrdinal("Latitude")) ? 0 : Convert.ToDecimal(reader["Latitude"]),
+                                    Longitude = reader.IsDBNull(reader.GetOrdinal("Longitude")) ? 0 : Convert.ToDecimal(reader["Longitude"])
+                                    };
+                                
 
                                 // 处理可选字段
                                 if (reader["BandwidthAvailable"] != DBNull.Value)
-                                    dataPoint.bandwidthUsage = Convert.ToDouble(reader["BandwidthAvailable"]);
+                                    dataPoint.bandwidthUsage = Convert.ToDecimal(reader["BandwidthAvailable"]);
 
                                 if (reader["MemoryUsage"] != DBNull.Value)
-                                    dataPoint.memoryUsage = Convert.ToDouble(reader["MemoryUsage"]);
+                                    dataPoint.memoryUsage = Convert.ToDecimal(reader["MemoryUsage"]);
+                                
                                 results.Add(dataPoint);
                             }
                             catch (Exception ex)

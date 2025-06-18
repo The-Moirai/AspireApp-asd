@@ -17,6 +17,10 @@ namespace ClassLibrary_Core.Drone
         /// </summary>
         public ModelStatus ModelStatus { get; set; }
         /// <summary>
+        /// 无人机型号名称 (用于显示)
+        /// </summary>
+        public string ModelType { get; set; } = "";
+        /// <summary>
         /// 无人机的位置
         /// </summary>
         public GPSPosition? CurrentPosition { get; set; }

@@ -35,7 +35,8 @@ var creationScript = $$"""
         CreatedBy NVARCHAR(128) NOT NULL DEFAULT SUSER_SNAME(),
 
         INDEX IX_MainTasks_Status (Status),
-        INDEX IX_MainTasks_CreationTime (CreationTime DESC)
+        INDEX IX_MainTasks_CreationTime (CreationTime DESC),
+        INDEX IX_MainTasks_Status_CreationTime (Status, CreationTime DESC)
     );
     GO
 
@@ -64,7 +65,10 @@ var creationScript = $$"""
 
         -- 索引
         INDEX IX_SubTasks_ParentTaskId (ParentTaskId),
-        INDEX IX_SubTasks_Status_Completion (Status, CompletedTime)
+        INDEX IX_SubTasks_Status_Completion (Status, CompletedTime),
+        INDEX IX_SubTasks_CreationTime (CreationTime DESC),
+        INDEX IX_SubTasks_ParentTask_CreationTime (ParentTaskId, CreationTime),
+        INDEX IX_SubTasks_Status_ParentTask (Status, ParentTaskId)
     );
     GO
 
@@ -93,9 +97,12 @@ var creationScript = $$"""
         -- 外键约束
         FOREIGN KEY (DroneId) REFERENCES Drones(Id) ON DELETE CASCADE,
 
-        -- 索引
+        -- 索引优化
         INDEX IX_DroneStatusHistory_DroneTime (DroneId, Timestamp DESC),
-        INDEX IX_DroneStatusHistory_Location (Latitude, Longitude)
+        INDEX IX_DroneStatusHistory_Location (Latitude, Longitude),
+        INDEX IX_DroneStatusHistory_Timestamp (Timestamp DESC),
+        INDEX IX_DroneStatusHistory_Status_Time (Status, Timestamp DESC),
+        INDEX IX_DroneStatusHistory_TimeRange (Timestamp, DroneId)  -- 支持时间范围查询
     );
     GO
 
@@ -113,7 +120,9 @@ var creationScript = $$"""
 
         -- 索引
         INDEX IX_DroneSubTasks_Time (AssignmentTime DESC),
-        INDEX IX_DroneSubTasks_Active (IsActive)
+        INDEX IX_DroneSubTasks_Active (IsActive),
+        INDEX IX_DroneSubTasks_DroneActive (DroneId, IsActive),
+        INDEX IX_DroneSubTasks_SubTaskActive (SubTaskId, IsActive)
     );
     GO
 
@@ -136,7 +145,8 @@ var creationScript = $$"""
         -- 索引
         INDEX IX_SubTaskHistory_SubTask (SubTaskId),
         INDEX IX_SubTaskHistory_ChangeTime (ChangeTime DESC),
-        INDEX IX_SubTaskHistory_StatusChange (NewStatus, ChangeTime)
+        INDEX IX_SubTaskHistory_StatusChange (NewStatus, ChangeTime),
+        INDEX IX_SubTaskHistory_DroneTime (DroneId, ChangeTime DESC)
     );
     GO
     -------------------------------------------

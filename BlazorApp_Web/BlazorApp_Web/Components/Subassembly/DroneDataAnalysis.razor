@@ -5,43 +5,49 @@
 @using LiveChartsCore.SkiaSharpView
 @using LiveChartsCore.SkiaSharpView.Painting
 @using SkiaSharp
+
 <div class="card">
     <div class="card-header">
         <h5>无人机历史数据分析</h5>
     </div>
     <div class="card-body">
         <div class="row">
+            <!-- 左侧控制面板 -->
             <div class="col-md-4">
-                <div class="form-group">
-                    <label>选择无人机:</label>
-                    <select class="form-control" @bind="SelectedDroneId">
+                <div class="form-group mb-3">
+                    <label class="form-label">选择无人机:</label>
+                    <select class="form-select" @bind="SelectedDroneId">
+                        <option value="">请选择无人机</option>
                         @foreach (var drone in AvailableDrones)
                         {
-                            <option value="@drone.Id">@drone.Name</option>
+                            <option value="@drone.Id">@drone.Name (@drone.ModelType)</option>
                         }
                     </select>
                 </div>
 
-                <div class="form-group">
-                    <label>分析类型:</label>
-                    <select class="form-control" @bind="AnalysisType">
+                <div class="form-group mb-3">
+                    <label class="form-label">分析类型:</label>
+                    <select class="form-select" @bind="AnalysisType">
                         <option value="recent">最近时间段数据</option>
                         <option value="task">特定任务数据</option>
+                        <option value="all">所有历史数据</option>
                     </select>
                 </div>
 
                 @if (AnalysisType == "recent")
                 {
-                    <div class="form-group">
-                        <label>时间段 (小时):</label>
+                    <div class="form-group mb-3">
+                        <label class="form-label">时间段 (小时):</label>
                         <input type="number" class="form-control" @bind="Hours" min="1" max="720" />
+                        <small class="form-text text-muted">最大720小时(30天)</small>
                     </div>
                 }
-                else
+                else if (AnalysisType == "task")
                 {
-                    <div class="form-group">
-                        <label>选择任务:</label>
-                        <select class="form-control" @bind="SelectedTaskId">
+                    <div class="form-group mb-3">
+                        <label class="form-label">选择任务:</label>
+                        <select class="form-select" @bind="SelectedTaskId">
+                            <option value="">请选择任务</option>
                             @foreach (var task in AvailableTasks)
                             {
                                 <option value="@task.Id">@task.Description</option>
@@ -50,50 +56,117 @@
                     </div>
                 }
 
-                <button class="btn btn-primary" @onclick="LoadData">查询</button>
-            </div>
-            <div class="col-md-8">
-        <!-- 使用 LiveCharts2 替代 Chart.js -->
-            <CartesianChart
-                Height="400"
-                Series="droneSeries"
-                XAxes="xAxes"
-                YAxes="yAxes"
-                LegendPosition="LegendPosition.Top">
-            </CartesianChart>
-
-        <!-- 数据表格保持不变 -->
-            </div>
-            <div class="col-md-8">
-                <div class="chart-container">
-                    <canvas id="droneChart"></canvas>
+                <div class="d-grid gap-2">
+                    <button class="btn btn-primary" @onclick="LoadData" disabled="@isLoading">
+                        @if (isLoading)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                        }
+                        查询数据
+                    </button>
+                    
+                    @if (DataPoints?.Any() == true)
+                    {
+                        <button class="btn btn-outline-secondary" @onclick="ExportData">
+                            <i class="fas fa-download me-1"></i>导出数据
+                        </button>
+                    }
                 </div>
 
+                <!-- 数据概览 -->
                 @if (DataPoints?.Any() == true)
                 {
-                    <div class="mt-3">
-                        <h6>数据详情</h6>
+                    <div class="mt-4">
+                        <h6>数据概览</h6>
+                        <table class="table table-sm">
+                            <tr><td>数据点数量:</td><td><strong>@DataPoints.Count</strong></td></tr>
+                            <tr><td>时间范围:</td><td>@DataPoints.Min(d => d.Timestamp).ToString("g") - @DataPoints.Max(d => d.Timestamp).ToString("g")</td></tr>
+                            <tr><td>平均CPU使用率:</td><td><strong>@DataPoints.Average(d => d.cpuUsage).ToString("F1")%</strong></td></tr>
+                            <tr><td>平均内存使用率:</td><td><strong>@DataPoints.Average(d => d.memoryUsage).ToString("F1")%</strong></td></tr>
+                        </table>
+                    </div>
+                }
+            </div>
+
+            <!-- 右侧图表和数据显示 -->
+            <div class="col-md-8">
+                @if (DataPoints?.Any() == true)
+                {
+                    <!-- 图表显示 -->
+                    <div class="mb-4">
+                        <h6>性能趋势图</h6>
+                        <CartesianChart
+                            Height="400"
+                            Series="droneSeries"
+                            XAxes="xAxes"
+                            YAxes="yAxes"
+                            LegendPosition="LegendPosition.Top">
+                        </CartesianChart>
+                    </div>
+
+                    <!-- 数据表格 -->
+                    <div class="table-responsive">
+                        <h6>详细数据 (显示最近50条)</h6>
                         <table class="table table-sm table-striped">
-                            <thead>
+                            <thead class="table-dark">
                                 <tr>
                                     <th>时间</th>
+                                    <th>CPU使用率</th>
+                                    <th>内存使用率</th>
                                     <th>位置</th>
                                     <th>状态</th>
+                                    <th>电池电量</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                @foreach (var point in DataPoints)
+                                @foreach (var point in DataPoints.OrderByDescending(d => d.Timestamp).Take(50))
                                 {
                                     <tr>
-                                        <td>@point.Timestamp.ToString()</td>
-                                        <td>@point.cpuUsage.ToString()</td>
-                                        <td>@point.memoryUsage.ToString()</td>
-                                        <td>@point.Latitude.ToString(), @point.Longitude.ToString()</td>
-                                        <td>@point.Status</td>
+                                        <td>@point.Timestamp.ToString("MM-dd HH:mm:ss")</td>
+                                        <td>
+                                            <span class="badge bg-@GetCpuBadgeClass((decimal)point.cpuUsage)">
+                                                @point.cpuUsage.ToString("F1")%
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-@GetMemoryBadgeClass((decimal)point.memoryUsage)">
+                                                @point.memoryUsage.ToString("F1")%
+                                            </span>
+                                        </td>
+                                        <td>(@point.Latitude.ToString("F4"), @point.Longitude.ToString("F4"))</td>
+                                        <td>
+                                            <span class="badge bg-@GetStatusBadgeClass(point.Status?.ToString())">
+                                                @point.Status
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <div class="progress" style="width: 60px; height: 20px;">
+                                                <div class="progress-bar bg-@GetBatteryProgressClass((decimal)point.BatteryLevel)" 
+                                                     style="width: @point.BatteryLevel%">
+                                                    @point.BatteryLevel%
+                                                </div>
+                                            </div>
+                                        </td>
                                     </tr>
                                 }
                             </tbody>
                         </table>
+                    </div>
+                }
+                else if (isLoading)
+                {
+                    <div class="text-center py-5">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">加载中...</span>
+                        </div>
+                        <p class="mt-3">正在加载无人机数据...</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="text-center py-5">
+                        <i class="fas fa-chart-line fa-3x text-muted mb-3"></i>
+                        <p class="text-muted">请选择无人机和分析类型，然后点击"查询数据"</p>
                     </div>
                 }
             </div>
@@ -102,71 +175,165 @@
 </div>
 
 @code {
-    [Parameter]
-    public EventCallback<DroneDataRequest> OnDataLoaded { get; set; }
-
-    //[Parameter]
-    //public EventCallback<DroneDataResponse> OnChartRendered { get; set; }
+    [Parameter] public EventCallback<DroneDataRequest> OnDataLoaded { get; set; }
+    [Parameter] public List<Drone> AvailableDrones { get; set; } = new();
+    [Parameter] public List<MainTask> AvailableTasks { get; set; } = new();
+    [Parameter] public List<DroneDataPoint> DataPoints { get; set; } = new();
 
     private ISeries[] droneSeries = Array.Empty<ISeries>();
     private Axis[] xAxes = Array.Empty<Axis>();
     private Axis[] yAxes = Array.Empty<Axis>();
-    public List<Drone> AvailableDrones { get; set; } = new List<Drone>();
-    public List<MainTask> AvailableTasks { get; set; } = new List<MainTask>();
-    public List<DroneDataPoint> DataPoints { get; set; } = new List<DroneDataPoint>(); // 用于存储无人机数据点
-    public string SelectedDroneId { get; set; } = "1"; // 默认选择第一个无人机
-    public string AnalysisType { get; set; } = "recent"; // 默认分析类型
-    public int Hours { get; set; } = 24; // 默认时间段为24小时
-    public string SelectedTaskId { get; set; } = ""; // 默认无特定任务选择
+    
+    private string SelectedDroneId { get; set; } = "";
+    private string AnalysisType { get; set; } = "recent";
+    private int Hours { get; set; } = 24;
+    private string SelectedTaskId { get; set; } = "";
+    private bool isLoading = false;
 
-
-    // 数据属性和方法...
-    private void LoadData()
+    protected override void OnParametersSet()
     {
-        var request = new DroneDataRequest {model=1,drone = Guid.Parse(SelectedDroneId),timeSpan=TimeSpan.FromHours(Hours)};
-        // 填充请求参数
-        OnDataLoaded.InvokeAsync(request);
+        if (DataPoints?.Any() == true)
+        {
+            RenderDroneChart(DataPoints);
+        }
     }
+
+    private async Task LoadData()
+    {
+        if (string.IsNullOrEmpty(SelectedDroneId))
+        {
+            return;
+        }
+
+        isLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            var request = new DroneDataRequest 
+            { 
+                model = AnalysisType switch
+                {
+                    "recent" => 1,
+                    "task" => 2,
+                    "all" => 3,
+                    _ => 1
+                },
+                drone = Guid.Parse(SelectedDroneId),
+                timeSpan = TimeSpan.FromHours(Hours)
+            };
+
+            if (AnalysisType == "task" && !string.IsNullOrEmpty(SelectedTaskId))
+            {
+                request.taskId = Guid.Parse(SelectedTaskId);
+            }
+
+            await OnDataLoaded.InvokeAsync(request);
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
     private void RenderDroneChart(List<DroneDataPoint> data)
     {
+        if (data == null || !data.Any()) return;
+
         xAxes = new[]
         {
             new Axis
             {
                 Labeler = value => new DateTime((long)value).ToString("HH:mm"),
                 LabelsRotation = 15,
-                UnitWidth = TimeSpan.FromMinutes(1).Ticks
+                UnitWidth = TimeSpan.FromMinutes(1).Ticks,
+                Name = "时间"
             }
         };
 
         yAxes = new[]
         {
-            new Axis { Name = "cpu" },
-            new Axis { Name = "memoryUsage", ShowSeparatorLines = false, Position = LiveChartsCore.Measure.AxisPosition.End }
+            new Axis { Name = "CPU使用率 (%)", Position = LiveChartsCore.Measure.AxisPosition.Start },
+            new Axis { Name = "内存使用率 (%)", ShowSeparatorLines = false, Position = LiveChartsCore.Measure.AxisPosition.End }
         };
+
+        var sortedData = data.OrderBy(d => d.Timestamp).ToList();
 
         droneSeries = new ISeries[]
         {
             new LineSeries<decimal>
             {
-                Name = "cpu",
-                Values = data.Select(d => (decimal)d.cpuUsage).ToList(),
-                Stroke = new LiveChartsCore.SkiaSharpView.Painting.SolidColorPaint(SKColors.DarkGreen) { StrokeThickness = 2 },
+                Name = "CPU使用率",
+                Values = sortedData.Select(d => (decimal)d.cpuUsage).ToArray(),
+                Stroke = new SolidColorPaint(SKColors.DarkGreen) { StrokeThickness = 2 },
                 Fill = null,
-                GeometrySize = 0,
-                YToolTipLabelFormatter = point => $"{point.Model:N1}%"
+                GeometrySize = 4,
+                YToolTipLabelFormatter = point => $"{point.Model:F1}%"
             },
             new LineSeries<decimal>
             {
-                Name = "memoryUsage",
-                Values = data.Select(d => (decimal)d.memoryUsage).ToList(),
+                Name = "内存使用率",
+                Values = sortedData.Select(d => (decimal)d.memoryUsage).ToArray(),
                 Stroke = new SolidColorPaint(SKColors.Blue) { StrokeThickness = 2 },
                 Fill = null,
-                GeometrySize = 0,
-                ScalesYAt = 1, // 使用第二个Y轴
-                YToolTipLabelFormatter = point => $"{point.Model:N1}米"
+                GeometrySize = 4,
+                ScalesYAt = 1,
+                YToolTipLabelFormatter = point => $"{point.Model:F1}%"
             }
+        };
+
+        StateHasChanged();
+    }
+
+    private Task ExportData()
+    {
+        // 实现数据导出功能
+        // 可以导出为CSV或Excel格式
+        return Task.CompletedTask;
+    }
+
+    private string GetCpuBadgeClass(decimal cpu)
+    {
+        return cpu switch
+        {
+            >= 80 => "danger",
+            >= 60 => "warning",
+            >= 40 => "info",
+            _ => "success"
         };
     }
 
+    private string GetMemoryBadgeClass(decimal memory)
+    {
+        return memory switch
+        {
+            >= 85 => "danger",
+            >= 70 => "warning",
+            >= 50 => "info",
+            _ => "success"
+        };
+    }
+
+    private string GetStatusBadgeClass(string status)
+    {
+        return status?.ToLower() switch
+        {
+            "active" or "flying" => "success",
+            "idle" or "standby" => "info",
+            "maintenance" => "warning",
+            "error" or "failure" => "danger",
+            _ => "secondary"
+        };
+    }
+
+    private string GetBatteryProgressClass(decimal battery)
+    {
+        return battery switch
+        {
+            >= 60 => "success",
+            >= 30 => "warning",
+            _ => "danger"
+        };
+    }
 }

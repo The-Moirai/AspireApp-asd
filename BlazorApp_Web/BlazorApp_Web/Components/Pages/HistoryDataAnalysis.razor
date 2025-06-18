@@ -5,64 +5,561 @@
 @using ClassLibrary_Core.Drone
 @using ClassLibrary_Core.Mission
 @inject HistoryApiService HistoryApiService
-<h3>无人机与任务历史数据分析</h3>
-    <div class="container-fluid">
-        <div class="row">
-            <div class="col-md-12">
-                <ul class="nav nav-tabs">
-                    <li class="nav-item">
-                        <a class="nav-link @(activeTab=="drone"?"active":"")" @onclick="@(()=>activeTab="drone")">无人机数据</a>
-                    </li>
-                   @*  <li class="nav-item">
-                        <a class="nav-link @(activeTab=="task"?"active":"")" @onclick="@(()=>activeTab="task")">任务数据</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link @(activeTab=="time"?"active":"")" @onclick="@(()=>activeTab="time")">时间范围分析</a>
-                    </li> *@
-                </ul>
+@inject IJSRuntime JSRuntime
+
+<div class="container-fluid">
+    <div class="row mb-3">
+        <div class="col-12">
+            <h3 class="mb-0">无人机与任务历史数据分析</h3>
+            <p class="text-muted">实时监控和分析无人机系统的历史数据、任务执行情况和性能指标</p>
+        </div>
+    </div>
+
+    <!-- 系统概览卡片 -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">系统概览</h5>
+                    <button class="btn btn-outline-primary btn-sm" @onclick="RefreshOverview">
+                        <i class="fas fa-sync-alt"></i> 刷新
+                    </button>
+                </div>
+                <div class="card-body">
+                    @if (systemOverview != null)
+                    {
+                        <div class="row">
+                            <div class="col-md-3">
+                                <div class="card border-primary">
+                                    <div class="card-body text-center">
+                                        <h4 class="text-primary">@systemOverview.Drones.Total</h4>
+                                        <p class="card-text">总无人机数</p>
+                                        <small class="text-muted">在线: @systemOverview.Drones.Online | 离线: @systemOverview.Drones.Offline</small>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card border-success">
+                                    <div class="card-body text-center">
+                                        <h4 class="text-success">@systemOverview.Tasks.TotalMainTasks</h4>
+                                        <p class="card-text">总任务数</p>
+                                        <small class="text-muted">完成率: @systemOverview.Tasks.MainTaskCompletionRate.ToString("F1")%</small>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card border-info">
+                                    <div class="card-body text-center">
+                                        <h4 class="text-info">@systemOverview.Tasks.ActiveSubTasks</h4>
+                                        <p class="card-text">活跃子任务</p>
+                                        <small class="text-muted">待处理: @systemOverview.Tasks.PendingSubTasks</small>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card border-warning">
+                                    <div class="card-body text-center">
+                                        <h4 class="text-warning">@systemOverview.Performance.EfficiencyRating</h4>
+                                        <p class="card-text">系统效率</p>
+                                        <small class="text-muted">平均执行时间: @systemOverview.Performance.AverageExecutionTimeMinutes.ToString("F1")分钟</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="text-center">
+                            <div class="spinner-border" role="status">
+                                <span class="sr-only">加载中...</span>
+                            </div>
+                            <p class="mt-2">正在加载系统概览...</p>
+                        </div>
+                    }
+                </div>
             </div>
         </div>
-    @if (activeTab == "drone")
-    {
-         <DroneDataAnalysis 
-            OnDataLoaded="LoadDroneData"
-            AvailableDrones="DataDrones"
-            DataPoints="DataPoints" />
-         }
-    @* else if (activeTab == "task")
-    {
-          <TaskDataAnalysis 
-            OnDataLoaded="LoadTaskData"
-             />
-    }
-    else if (activeTab == "time")
-    {
-          <TimeRangeAnalysis 
-            OnDataLoaded="LoadTimeRangeData"
-            OnChartRendered="RenderTimeRangeChart" />
-    } *@
     </div>
-    @code {
-        private string activeTab = "drone";
-        private List<Drone> DataDrones { get; set; } = new List<Drone>();
-        private List<MainTask> DataTasks { get; set; } = new List<MainTask>();
-        private List<DroneDataPoint> DataPoints { get; set; } = new List<DroneDataPoint>(); // 用于存储无人机数据点
-        protected override async Task OnInitializedAsync()
+
+    <!-- 主要功能选项卡 -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <ul class="nav nav-tabs card-header-tabs">
+                        <li class="nav-item">
+                            <a class="nav-link @(activeTab=="drone"?"active":"")" 
+                               @onclick="@(()=>SetActiveTab("drone"))">
+                                <i class="fas fa-helicopter"></i> 无人机数据
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link @(activeTab=="task"?"active":"")" 
+                               @onclick="@(()=>SetActiveTab("task"))">
+                                <i class="fas fa-tasks"></i> 任务数据
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link @(activeTab=="time"?"active":"")" 
+                               @onclick="@(()=>SetActiveTab("time"))">
+                                <i class="fas fa-clock"></i> 时间范围分析
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link @(activeTab=="statistics"?"active":"")" 
+                               @onclick="@(()=>SetActiveTab("statistics"))">
+                                <i class="fas fa-chart-bar"></i> 统计分析
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link @(activeTab=="management"?"active":"")" 
+                               @onclick="@(()=>SetActiveTab("management"))">
+                                <i class="fas fa-cogs"></i> 数据管理
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+                
+                <div class="card-body">
+                    @if (activeTab == "drone")
+                    {
+                        <DroneDataAnalysis 
+                            OnDataLoaded="LoadDroneData"
+                            AvailableDrones="DataDrones"
+                            AvailableTasks="DataTasks"
+                            DataPoints="DataPoints" />
+                    }
+                    else if (activeTab == "task")
+                    {
+                        <TaskDataAnalysis 
+                            OnDataLoaded="LoadTaskData"
+                            AvailableDrones="DataDrones"
+                            AvailableTasks="DataTasks"
+                            TaskData="TaskSubTasks" />
+                    }
+                    else if (activeTab == "time")
+                    {
+                        <TimeRangeAnalysis 
+                            OnDataLoaded="LoadTimeRangeData"
+                            OnChartRendered="RenderTimeRangeChart" />
+                    }
+                    else if (activeTab == "statistics")
+                    {
+                        <!-- 统计分析页面 -->
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h6>任务统计</h6>
+                                    </div>
+                                    <div class="card-body">
+                                        @if (taskStatistics != null)
+                                        {
+                                            <table class="table table-sm">
+                                                <tr><td>总主任务数:</td><td><strong>@taskStatistics.TotalMainTasks</strong></td></tr>
+                                                <tr><td>总子任务数:</td><td><strong>@taskStatistics.TotalSubTasks</strong></td></tr>
+                                                <tr><td>活跃主任务:</td><td><span class="text-success">@taskStatistics.ActiveMainTasks</span></td></tr>
+                                                <tr><td>已完成主任务:</td><td><span class="text-primary">@taskStatistics.CompletedMainTasks</span></td></tr>
+                                                <tr><td>失败主任务:</td><td><span class="text-danger">@taskStatistics.FailedMainTasks</span></td></tr>
+                                                <tr><td>主任务完成率:</td><td><strong>@taskStatistics.MainTaskCompletionRate.ToString("F1")%</strong></td></tr>
+                                                <tr><td>子任务完成率:</td><td><strong>@taskStatistics.SubTaskCompletionRate.ToString("F1")%</strong></td></tr>
+                                            </table>
+                                        }
+                                        else
+                                        {
+                                            <p class="text-muted">正在加载统计数据...</p>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h6>性能分析</h6>
+                                    </div>
+                                    <div class="card-body">
+                                        @if (performanceAnalysis != null)
+                                        {
+                                            <table class="table table-sm">
+                                                <tr><td>已完成任务数:</td><td><strong>@performanceAnalysis.TotalCompletedTasks</strong></td></tr>
+                                                <tr><td>平均执行时间:</td><td><strong>@performanceAnalysis.AverageExecutionTimeMinutes.ToString("F1") 分钟</strong></td></tr>
+                                                <tr><td>最短执行时间:</td><td>@performanceAnalysis.MinExecutionTimeMinutes.ToString("F1") 分钟</td></tr>
+                                                <tr><td>最长执行时间:</td><td>@performanceAnalysis.MaxExecutionTimeMinutes.ToString("F1") 分钟</td></tr>
+                                                <tr><td>执行时间跨度:</td><td>@performanceAnalysis.ExecutionTimeRange.ToString("F1") 分钟</td></tr>
+                                                <tr><td>效率评级:</td><td><span class="badge badge-@GetEfficiencyBadgeClass(performanceAnalysis.EfficiencyRating)">@performanceAnalysis.EfficiencyRating</span></td></tr>
+                                            </table>
+                                        }
+                                        else
+                                        {
+                                            <p class="text-muted">正在加载性能数据...</p>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 过期任务警告 -->
+                        <div class="row mt-3">
+                            <div class="col-12">
+                                <div class="card">
+                                    <div class="card-header d-flex justify-content-between align-items-center">
+                                        <h6>过期任务监控</h6>
+                                        <div>
+                                            <input type="number" class="form-control form-control-sm d-inline-block" 
+                                                   style="width: 80px;" @bind="expiredTimeoutMinutes" />
+                                            <label class="ml-1">分钟</label>
+                                            <button class="btn btn-outline-warning btn-sm ml-2" @onclick="LoadExpiredTasks">
+                                                检查过期任务
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="card-body">
+                                        @if (expiredTasks.Any())
+                                        {
+                                            <div class="alert alert-warning">
+                                                <strong>发现 @expiredTasks.Count 个过期任务!</strong>
+                                            </div>
+                                            <table class="table table-sm">
+                                                <thead>
+                                                    <tr>
+                                                        <th>任务ID</th>
+                                                        <th>描述</th>
+                                                        <th>分配时间</th>
+                                                        <th>状态</th>
+                                                        <th>重分配次数</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    @foreach (var task in expiredTasks)
+                                                    {
+                                                        <tr>
+                                                            <td>@task.Id.ToString().Substring(0, 8)...</td>
+                                                            <td>@task.Description</td>
+                                                            <td>@task.AssignedTime?.ToString("g")</td>
+                                                            <td><span class="badge badge-danger">@task.Status</span></td>
+                                                            <td>@task.ReassignmentCount</td>
+                                                        </tr>
+                                                    }
+                                                </tbody>
+                                            </table>
+                                        }
+                                        else
+                                        {
+                                            <p class="text-success">✅ 没有发现过期任务</p>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                    else if (activeTab == "management")
+                    {
+                        <!-- 数据管理页面 -->
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h6>数据同步</h6>
+                                    </div>
+                                    <div class="card-body">
+                                        <p class="text-muted">管理内存和数据库之间的数据同步</p>
+                                        <div class="d-grid gap-2">
+                                            <button class="btn btn-outline-primary" @onclick="LoadFromDatabase" disabled="@isLoading">
+                                                @if (isLoading && currentOperation == "load")
+                                                {
+                                                    <span class="spinner-border spinner-border-sm" role="status"></span>
+                                                }
+                                                从数据库加载任务
+                                            </button>
+                                            <button class="btn btn-outline-success" @onclick="SyncToDatabase" disabled="@isLoading">
+                                                @if (isLoading && currentOperation == "sync")
+                                                {
+                                                    <span class="spinner-border spinner-border-sm" role="status"></span>
+                                                }
+                                                同步任务到数据库
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h6>任务维护</h6>
+                                    </div>
+                                    <div class="card-body">
+                                        <p class="text-muted">管理失败和过期的任务</p>
+                                        <div class="d-grid gap-2">
+                                            <button class="btn btn-outline-warning" @onclick="ReassignFailedTasks" disabled="@isLoading">
+                                                @if (isLoading && currentOperation == "reassign")
+                                                {
+                                                    <span class="spinner-border spinner-border-sm" role="status"></span>
+                                                }
+                                                重新分配失败任务
+                                            </button>
+                                            <div class="input-group">
+                                                <input type="number" class="form-control" @bind="cleanupDays" placeholder="天数" />
+                                                <button class="btn btn-outline-danger" @onclick="CleanupOldTasks" disabled="@isLoading">
+                                                    @if (isLoading && currentOperation == "cleanup")
+                                                    {
+                                                        <span class="spinner-border spinner-border-sm" role="status"></span>
+                                                    }
+                                                    清理旧任务
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 操作结果显示 -->
+                        @if (!string.IsNullOrEmpty(managementMessage))
+                        {
+                            <div class="row mt-3">
+                                <div class="col-12">
+                                    <div class="alert @(managementSuccess ? "alert-success" : "alert-danger") alert-dismissible fade show">
+                                        @managementMessage
+                                        <button type="button" class="btn-close" @onclick="ClearManagementMessage"></button>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string activeTab = "drone";
+    private bool isLoading = false;
+    private string currentOperation = "";
+    private int expiredTimeoutMinutes = 30;
+    private int cleanupDays = 30;
+    private string managementMessage = "";
+    private bool managementSuccess = false;
+
+    // 数据属性
+    private List<Drone> DataDrones { get; set; } = new();
+    private List<MainTask> DataTasks { get; set; } = new();
+    private List<SubTask> TaskSubTasks { get; set; } = new();
+    private List<DroneDataPoint> DataPoints { get; set; } = new();
+    private List<SubTask> expiredTasks { get; set; } = new();
+    
+    // 统计和分析数据
+    private SystemOverview? systemOverview;
+    private TaskStatistics? taskStatistics;
+    private TaskPerformanceAnalysis? performanceAnalysis;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Task.WhenAll(
+            LoadInitialData(),
+            RefreshOverview(),
+            LoadStatisticsData()
+        );
+    }
+
+    private async Task LoadInitialData()
+    {
+        try
         {
-         // 初始化时加载数据
-            var response = HistoryApiService.GetAllDroneDataAsync();
-           
-            
-            
+            DataDrones = await HistoryApiService.GetAllDroneDataAsync();
+            DataTasks = await HistoryApiService.GetAllTasksAsync();
         }
-        private async Task LoadDroneData(DroneDataRequest request)
+        catch (Exception ex)
         {
-            // 调用API获取无人机数据
-            // 实现根据请求参数调用不同API端点
-            if (request.model==1)
-            {
-             DataPoints = await HistoryApiService.GetRecentDroneDataAsync(request.drone, request.timeSpan);
-            }
+            Console.WriteLine($"加载初始数据错误: {ex.Message}");
         }
     }
+
+    private async Task RefreshOverview()
+    {
+        try
+        {
+            systemOverview = await HistoryApiService.GetSystemOverviewAsync();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"刷新概览数据错误: {ex.Message}");
+        }
+    }
+
+    private async Task LoadStatisticsData()
+    {
+        try
+        {
+            taskStatistics = await HistoryApiService.GetTaskStatisticsAsync();
+            performanceAnalysis = await HistoryApiService.GetTaskPerformanceAnalysisAsync();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"加载统计数据错误: {ex.Message}");
+        }
+    }
+
+    private async Task SetActiveTab(string tab)
+    {
+        activeTab = tab;
+        
+        // 切换到统计页面时刷新数据
+        if (tab == "statistics")
+        {
+            await LoadStatisticsData();
+        }
+    }
+
+    private async Task LoadDroneData(DroneDataRequest request)
+    {
+        try
+        {
+            if (request.model == 1)
+            {
+                DataPoints = await HistoryApiService.GetRecentDroneDataAsync(request.drone, request.timeSpan);
+            }
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"加载无人机数据错误: {ex.Message}");
+        }
+    }
+
+    private async Task LoadTaskData(DroneDataRequest request)
+    {
+        try
+        {
+            // 实现任务数据加载逻辑
+            if (request.taskId.HasValue)
+            {
+                TaskSubTasks = await HistoryApiService.GetTaskSubTasksAsync(request.taskId.Value);
+            }
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"加载任务数据错误: {ex.Message}");
+        }
+    }
+
+    private async Task LoadTimeRangeData(TimeRangeData request)
+    {
+        try
+        {
+            DataPoints = await HistoryApiService.GetAllDronesDataInTimeRangeAsync(request.StartTime, request.EndTime);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"加载时间范围数据错误: {ex.Message}");
+        }
+    }
+
+    private Task RenderTimeRangeChart(List<DroneDataPoint> data)
+    {
+        // 时间范围图表渲染逻辑
+        return Task.CompletedTask;
+    }
+
+    private async Task LoadExpiredTasks()
+    {
+        try
+        {
+            expiredTasks = await HistoryApiService.GetExpiredSubTasksAsync(expiredTimeoutMinutes);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"加载过期任务错误: {ex.Message}");
+        }
+    }
+
+    // 数据管理方法
+    private async Task LoadFromDatabase()
+    {
+        await ExecuteManagementOperation("load", async () =>
+        {
+            await HistoryApiService.LoadTasksFromDatabaseAsync();
+            await LoadInitialData();
+            return "任务数据已从数据库加载完成";
+        });
+    }
+
+    private async Task SyncToDatabase()
+    {
+        await ExecuteManagementOperation("sync", async () =>
+        {
+            await HistoryApiService.SyncTasksToDatabaseAsync();
+            return "任务数据已同步到数据库";
+        });
+    }
+
+    private async Task ReassignFailedTasks()
+    {
+        await ExecuteManagementOperation("reassign", async () =>
+        {
+            var count = await HistoryApiService.ReassignFailedSubTasksAsync();
+            return $"已重新分配 {count} 个失败的子任务";
+        });
+    }
+
+    private async Task CleanupOldTasks()
+    {
+        await ExecuteManagementOperation("cleanup", async () =>
+        {
+            var count = await HistoryApiService.CleanupOldCompletedTasksAsync(cleanupDays);
+            return $"已清理 {count} 个超过 {cleanupDays} 天的已完成任务";
+        });
+    }
+
+    private async Task ExecuteManagementOperation(string operation, Func<Task<string>> action)
+    {
+        try
+        {
+            isLoading = true;
+            currentOperation = operation;
+            StateHasChanged();
+
+            var message = await action();
+            
+            managementMessage = message;
+            managementSuccess = true;
+            
+            // 刷新相关数据
+            await Task.WhenAll(RefreshOverview(), LoadStatisticsData());
+        }
+        catch (Exception ex)
+        {
+            managementMessage = $"操作失败: {ex.Message}";
+            managementSuccess = false;
+        }
+        finally
+        {
+            isLoading = false;
+            currentOperation = "";
+            StateHasChanged();
+        }
+    }
+
+    private void ClearManagementMessage()
+    {
+        managementMessage = "";
+        StateHasChanged();
+    }
+
+    private string GetEfficiencyBadgeClass(string rating)
+    {
+        return rating switch
+        {
+            "优秀" => "success",
+            "良好" => "primary",
+            "一般" => "warning",
+            _ => "danger"
+        };
+    }
+}
 

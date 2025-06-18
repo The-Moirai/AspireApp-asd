@@ -64,12 +64,28 @@ namespace WebApplication_Drone.Services
         /// 大任务数据设置
         /// </summary>
         /// <param name="tasks">大任务数据列表</param>
-        public void SetTasks(IEnumerable<MainTask> tasks)
+        public async void SetTasks(IEnumerable<MainTask> tasks)
         {
             lock (_lock)
             {
                 _tasks.Clear();
                 _tasks.AddRange(tasks);
+
+                // 异步同步到数据库
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        foreach (var task in tasks)
+                        {
+                            await _sqlserverService.FullSyncMainTaskAsync(task);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"任务数据库同步错误: {ex.Message}");
+                    }
+                });
             }
         }
         /// <summary>
@@ -78,14 +94,28 @@ namespace WebApplication_Drone.Services
         /// <param name="task">
         /// 大任务实体
         /// </param>
-        public void AddTask(MainTask task,string CreatedBy)
+        public async void AddTask(MainTask task, string CreatedBy)
         {
             lock (_lock)
             {
                 if (!_tasks.Any(t => t.Id == task.Id))
+                {
                     _tasks.Add(task);
-                OnDroneChanged("add",task);
-                _sqlserverService.AddMainTask(task,CreatedBy);
+                    OnDroneChanged("add", task);
+
+                    // 异步同步到数据库
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await _sqlserverService.FullSyncMainTaskAsync(task);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"添加任务数据库同步错误: {ex.Message}");
+                        }
+                    });
+                }
             }
         }
         /// <summary>
@@ -105,8 +135,21 @@ namespace WebApplication_Drone.Services
                 if (idx >= 0)
                 {
                     _tasks[idx] = task;
-                    //数据库更新操作
-                   
+                    OnDroneChanged("update", task);
+
+                    // 异步同步到数据库
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await _sqlserverService.FullSyncMainTaskAsync(task);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"更新任务数据库同步错误: {ex.Message}");
+                        }
+                    });
+
                     return true;
                 }
                 return false;
@@ -129,6 +172,21 @@ namespace WebApplication_Drone.Services
                 if (task != null)
                 {
                     _tasks.Remove(task);
+                    OnDroneChanged("delete", task);
+
+                    // 异步删除数据库记录
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await _sqlserverService.DeleteMainTaskAsync(id);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"删除任务数据库同步错误: {ex.Message}");
+                        }
+                    });
+
                     return true;
                 }
                 return false;
@@ -144,12 +202,29 @@ namespace WebApplication_Drone.Services
                 var mainTask = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
                 if (mainTask == null) return false;
                 var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
-                if (subTask == null) return false;                
+                if (subTask == null) return false;
+
                 subTask.AssignedDrone = null;
                 subTask.Status = TaskStatus.WaitingForActivation;
                 subTask.AssignedTime = null;
                 subTask.CompletedTime = null;
-                
+                subTask.ReassignmentCount++;
+
+                // 异步同步到数据库
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _sqlserverService.UpdateSubTaskAsync(subTask);
+                        // 更新DroneSubTasks表，设置IsActive = 0
+                        // 这个操作在SqlserverService中的SyncDroneSubTasksAsync中处理
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"卸载子任务数据库同步错误: {ex.Message}");
+                    }
+                });
+
                 return true;
             }
         }
@@ -164,10 +239,26 @@ namespace WebApplication_Drone.Services
                 if (mainTask == null) return false;
                 var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
                 if (subTask == null) return false;
-                
+
                 subTask.AssignedDrone = droneName;
                 subTask.Status = TaskStatus.Running;
-                subTask.AssignedTime = DateTime.Now;
+                subTask.AssignedTime = DateTime.UtcNow;
+                subTask.ReassignmentCount++;
+
+                // 异步同步到数据库
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _sqlserverService.UpdateSubTaskAsync(subTask);
+                        // 这里应该找到对应的DroneId并更新DroneSubTasks表
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"重装子任务数据库同步错误: {ex.Message}");
+                    }
+                });
+
                 return true;
             }
         }
@@ -182,10 +273,24 @@ namespace WebApplication_Drone.Services
                 if (mainTask == null) return false;
                 var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
                 if (subTask == null) return false;
-                
+
                 subTask.AssignedDrone = droneName;
                 subTask.Status = TaskStatus.Running;
-                subTask.AssignedTime = DateTime.Now;
+                subTask.AssignedTime = DateTime.UtcNow;
+
+                // 异步同步到数据库
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _sqlserverService.UpdateSubTaskAsync(subTask);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"分配子任务数据库同步错误: {ex.Message}");
+                    }
+                });
+
                 return true;
             }
         }
@@ -202,7 +307,32 @@ namespace WebApplication_Drone.Services
                 if (subTask == null) return false;
 
                 subTask.Status = TaskStatus.RanToCompletion;
-                subTask.CompletedTime = DateTime.Now;
+                subTask.CompletedTime = DateTime.UtcNow;
+
+                // 检查主任务是否也完成了
+                if (mainTask.SubTasks.All(st => st.Status == TaskStatus.RanToCompletion))
+                {
+                    mainTask.Status = TaskStatus.RanToCompletion;
+                    mainTask.CompletedTime = DateTime.UtcNow;
+                }
+
+                // 异步同步到数据库
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _sqlserverService.UpdateSubTaskAsync(subTask);
+                        if (mainTask.Status == TaskStatus.RanToCompletion)
+                        {
+                            await _sqlserverService.UpdateMainTaskAsync(mainTask);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"完成子任务数据库同步错误: {ex.Message}");
+                    }
+                });
+
                 return true;
             }
         }
@@ -240,9 +370,25 @@ namespace WebApplication_Drone.Services
                 var mainTask = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
                 if (mainTask != null)
                 {
+                    subTask.ParentTask = mainTaskId; // 确保设置父任务ID
+                    subTask.CreationTime = DateTime.UtcNow; // 确保设置创建时间
                     mainTask.SubTasks.Add(subTask);
-                   // 触发任务变更事件
+
+                    // 触发任务变更事件
                     OnDroneChanged("update", mainTask);
+
+                    // 异步同步到数据库
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await _sqlserverService.AddSubTaskAsync(subTask);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"添加子任务数据库同步错误: {ex.Message}");
+                        }
+                    });
                 }
             }
         }
@@ -296,11 +442,67 @@ namespace WebApplication_Drone.Services
         /// <param name="startTime"></param>
         /// <param name="endTime"></param>
         /// <returns></returns>
-        /// <exception cref="NotImplementedException"></exception>
         public async Task<List<DroneDataPoint>> GetAllTasksDataInTimeRangeAsync(DateTime startTime, DateTime endTime)
         {
-            List<DroneDataPoint> recentData = new List<DroneDataPoint>();
-            return recentData;
+            try
+            {
+                return await _sqlserverService.GetAllDronesDataInTimeRangeAsync(startTime, endTime);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"获取时间范围内数据错误: {ex.Message}");
+                return new List<DroneDataPoint>();
+            }
+        }
+        /// <summary>
+        /// 从数据库加载所有主任务
+        /// </summary>
+        public async Task LoadTasksFromDatabaseAsync()
+        {
+            try
+            {
+                var dbTasks = await _sqlserverService.GetAllMainTasksAsync();
+                
+                // 为每个主任务加载子任务
+                foreach (var dbTask in dbTasks)
+                {
+                    var subTasks = await _sqlserverService.GetSubTasksByParentAsync(dbTask.Id);
+                    dbTask.SubTasks.AddRange(subTasks);
+                }
+
+                lock (_lock)
+                {
+                    _tasks.Clear();
+                    _tasks.AddRange(dbTasks);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"从数据库加载任务错误: {ex.Message}");
+            }
+        }
+        /// <summary>
+        /// 同步所有任务到数据库
+        /// </summary>
+        public async Task SyncAllTasksToDatabaseAsync()
+        {
+            try
+            {
+                List<MainTask> tasksToSync;
+                lock (_lock)
+                {
+                    tasksToSync = _tasks.ToList();
+                }
+
+                foreach (var task in tasksToSync)
+                {
+                    await _sqlserverService.FullSyncMainTaskAsync(task);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"同步任务到数据库错误: {ex.Message}");
+            }
         }
         // 新增：深度克隆方法
         public static MainTask CloneTask(MainTask task) => new()
@@ -317,6 +519,276 @@ namespace WebApplication_Drone.Services
             AssignedDrone = st.AssignedDrone,
             Status = st.Status
         };
+
+        /// <summary>
+        /// 获取任务统计信息
+        /// </summary>
+        public TaskStatistics GetTaskStatistics()
+        {
+            lock (_lock)
+            {
+                var stats = new TaskStatistics();
+                
+                foreach (var task in _tasks)
+                {
+                    stats.TotalMainTasks++;
+                    stats.TotalSubTasks += task.SubTasks.Count;
+                    
+                    switch (task.Status)
+                    {
+                        case TaskStatus.WaitingForActivation:
+                            stats.PendingMainTasks++;
+                            break;
+                        case TaskStatus.Running:
+                            stats.ActiveMainTasks++;
+                            break;
+                        case TaskStatus.RanToCompletion:
+                            stats.CompletedMainTasks++;
+                            break;
+                        case TaskStatus.Faulted:
+                        case TaskStatus.Canceled:
+                            stats.FailedMainTasks++;
+                            break;
+                    }
+                    
+                    foreach (var subTask in task.SubTasks)
+                    {
+                        switch (subTask.Status)
+                        {
+                            case TaskStatus.WaitingForActivation:
+                            case TaskStatus.WaitingToRun:
+                                stats.PendingSubTasks++;
+                                break;
+                            case TaskStatus.Running:
+                                stats.ActiveSubTasks++;
+                                break;
+                            case TaskStatus.RanToCompletion:
+                                stats.CompletedSubTasks++;
+                                break;
+                            case TaskStatus.Faulted:
+                            case TaskStatus.Canceled:
+                                stats.FailedSubTasks++;
+                                break;
+                        }
+                    }
+                }
+                
+                return stats;
+            }
+        }
+
+        /// <summary>
+        /// 根据状态获取主任务
+        /// </summary>
+        public List<MainTask> GetTasksByStatus(TaskStatus status)
+        {
+            lock (_lock)
+            {
+                return _tasks.Where(t => t.Status == status).ToList();
+            }
+        }
+
+        /// <summary>
+        /// 获取指定无人机的所有活跃子任务
+        /// </summary>
+        public List<SubTask> GetActiveSubTasksForDrone(string droneName)
+        {
+            lock (_lock)
+            {
+                var activeTasks = new List<SubTask>();
+                foreach (var mainTask in _tasks)
+                {
+                    var droneSubTasks = mainTask.SubTasks
+                        .Where(st => st.AssignedDrone == droneName && 
+                                   (st.Status == TaskStatus.Running || st.Status == TaskStatus.WaitingToRun))
+                        .ToList();
+                    activeTasks.AddRange(droneSubTasks);
+                }
+                return activeTasks;
+            }
+        }
+
+        /// <summary>
+        /// 批量更新子任务状态
+        /// </summary>
+        public async Task<int> BatchUpdateSubTaskStatusAsync(List<Guid> subTaskIds, TaskStatus newStatus, string reason = null)
+        {
+            var updatedCount = 0;
+            
+            lock (_lock)
+            {
+                foreach (var subTaskId in subTaskIds)
+                {
+                    foreach (var mainTask in _tasks)
+                    {
+                        var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
+                        if (subTask != null)
+                        {
+                            subTask.Status = newStatus;
+                            if (newStatus == TaskStatus.RanToCompletion || newStatus == TaskStatus.Faulted)
+                            {
+                                subTask.CompletedTime = DateTime.UtcNow;
+                            }
+                            updatedCount++;
+                            
+                            // 异步同步到数据库
+                            _ = Task.Run(async () =>
+                            {
+                                try
+                                {
+                                    await _sqlserverService.UpdateSubTaskAsync(subTask);
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"批量更新子任务数据库同步错误: {ex.Message}");
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+            
+            return updatedCount;
+        }
+
+        /// <summary>
+        /// 获取过期的子任务（超时未完成）
+        /// </summary>
+        public List<SubTask> GetExpiredSubTasks(TimeSpan timeout)
+        {
+            var cutoffTime = DateTime.UtcNow - timeout;
+            
+            lock (_lock)
+            {
+                var expiredTasks = new List<SubTask>();
+                foreach (var mainTask in _tasks)
+                {
+                    var expired = mainTask.SubTasks
+                        .Where(st => st.Status == TaskStatus.Running && 
+                                   st.AssignedTime.HasValue && 
+                                   st.AssignedTime.Value < cutoffTime)
+                        .ToList();
+                    expiredTasks.AddRange(expired);
+                }
+                return expiredTasks;
+            }
+        }
+
+        /// <summary>
+        /// 重新分配失败的子任务
+        /// </summary>
+        public async Task<int> ReassignFailedSubTasksAsync()
+        {
+            var reassignedCount = 0;
+            
+            lock (_lock)
+            {
+                foreach (var mainTask in _tasks)
+                {
+                    var failedSubTasks = mainTask.SubTasks
+                        .Where(st => st.Status == TaskStatus.Faulted && st.ReassignmentCount < 3)
+                        .ToList();
+                    
+                    foreach (var subTask in failedSubTasks)
+                    {
+                        subTask.Status = TaskStatus.WaitingForActivation;
+                        subTask.AssignedDrone = null;
+                        subTask.AssignedTime = null;
+                        subTask.CompletedTime = null;
+                        subTask.ReassignmentCount++;
+                        reassignedCount++;
+                        
+                        // 异步同步到数据库
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await _sqlserverService.UpdateSubTaskAsync(subTask);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"重新分配子任务数据库同步错误: {ex.Message}");
+                            }
+                        });
+                    }
+                }
+            }
+            
+            return reassignedCount;
+        }
+
+        /// <summary>
+        /// 清理已完成的旧任务
+        /// </summary>
+        public async Task<int> CleanupOldCompletedTasksAsync(TimeSpan maxAge)
+        {
+            var cutoffTime = DateTime.UtcNow - maxAge;
+            var cleanedCount = 0;
+            
+            lock (_lock)
+            {
+                var tasksToRemove = _tasks
+                    .Where(t => t.Status == TaskStatus.RanToCompletion && 
+                               t.CompletedTime.HasValue && 
+                               t.CompletedTime.Value < cutoffTime)
+                    .ToList();
+                
+                foreach (var task in tasksToRemove)
+                {
+                    _tasks.Remove(task);
+                    cleanedCount++;
+                    
+                    // 异步删除数据库记录
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await _sqlserverService.DeleteMainTaskAsync(task.Id);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"清理旧任务数据库同步错误: {ex.Message}");
+                        }
+                    });
+                }
+            }
+            
+            return cleanedCount;
+        }
+
+        /// <summary>
+        /// 获取任务执行时间分析
+        /// </summary>
+        public TaskPerformanceAnalysis GetTaskPerformanceAnalysis()
+        {
+            lock (_lock)
+            {
+                var analysis = new TaskPerformanceAnalysis();
+                var completedSubTasks = new List<SubTask>();
+                
+                foreach (var mainTask in _tasks)
+                {
+                    completedSubTasks.AddRange(
+                        mainTask.SubTasks.Where(st => st.Status == TaskStatus.RanToCompletion && 
+                                                    st.AssignedTime.HasValue && 
+                                                    st.CompletedTime.HasValue));
+                }
+                
+                if (completedSubTasks.Any())
+                {
+                    var executionTimes = completedSubTasks
+                        .Select(st => (st.CompletedTime!.Value - st.AssignedTime!.Value).TotalMinutes)
+                        .ToList();
+                    
+                    analysis.AverageExecutionTimeMinutes = executionTimes.Average();
+                    analysis.MinExecutionTimeMinutes = executionTimes.Min();
+                    analysis.MaxExecutionTimeMinutes = executionTimes.Max();
+                    analysis.TotalCompletedTasks = completedSubTasks.Count;
+                }
+                
+                return analysis;
+            }
+        }
     }
 
     /// <summary>

@@ -5,147 +5,442 @@
 @using LiveChartsCore.SkiaSharpView
 @using LiveChartsCore.SkiaSharpView.Painting
 @using SkiaSharp
+
 <div class="card">
     <div class="card-header">
         <h5>时间范围历史数据分析</h5>
     </div>
     <div class="card-body">
         <div class="row">
+            <!-- 左侧控制面板 -->
             <div class="col-md-4">
-                <div class="form-group">
-                    <label>开始时间:</label>
+                <div class="form-group mb-3">
+                    <label class="form-label">开始时间:</label>
                     <input type="datetime-local" class="form-control" @bind="StartTime" />
                 </div>
 
-                <div class="form-group">
-                    <label>结束时间:</label>
+                <div class="form-group mb-3">
+                    <label class="form-label">结束时间:</label>
                     <input type="datetime-local" class="form-control" @bind="EndTime" />
                 </div>
 
-                <div class="form-group">
-                    <label>分析类型:</label>
-                    <select class="form-control" @bind="AnalysisType">
+                <div class="form-group mb-3">
+                    <label class="form-label">快速选择:</label>
+                    <div class="btn-group-vertical d-grid gap-1">
+                        <button class="btn btn-outline-secondary btn-sm" @onclick="() => SetQuickRange(1)">最近1小时</button>
+                        <button class="btn btn-outline-secondary btn-sm" @onclick="() => SetQuickRange(6)">最近6小时</button>
+                        <button class="btn btn-outline-secondary btn-sm" @onclick="() => SetQuickRange(24)">最近24小时</button>
+                        <button class="btn btn-outline-secondary btn-sm" @onclick="() => SetQuickRange(168)">最近7天</button>
+                    </div>
+                </div>
+
+                <div class="form-group mb-3">
+                    <label class="form-label">分析类型:</label>
+                    <select class="form-select" @bind="AnalysisType">
                         <option value="drones">无人机数据</option>
                         <option value="tasks">任务数据</option>
+                        <option value="combined">综合分析</option>
+                        <option value="timeline">时间线分析</option>
                     </select>
                 </div>
 
-                <button class="btn btn-primary" @onclick="LoadData">查询</button>
-            </div>
+                @if (AnalysisType == "drones" || AnalysisType == "combined")
+                {
+                    <div class="form-group mb-3">
+                        <label class="form-label">数据粒度:</label>
+                        <select class="form-select" @bind="DataGranularity">
+                            <option value="raw">原始数据</option>
+                            <option value="hourly">按小时聚合</option>
+                            <option value="daily">按天聚合</option>
+                        </select>
+                    </div>
+                }
 
-            <div class="col-md-8">
-                <div class="chart-container">
-                    <canvas id="timeRangeChart"></canvas>
+                <div class="d-grid gap-2">
+                    <button class="btn btn-primary" @onclick="LoadData" disabled="@isLoading">
+                        @if (isLoading)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                        }
+                        分析数据
+                    </button>
+                    
+                    @if (TimeRangeData?.Any() == true || DataPoints?.Any() == true)
+                    {
+                        <button class="btn btn-outline-success" @onclick="ExportTimeRangeReport">
+                            <i class="fas fa-file-csv me-1"></i>导出报告
+                        </button>
+                    }
                 </div>
 
+                <!-- 时间范围统计 -->
                 @if (TimeRangeData?.Any() == true)
                 {
-                    <div class="mt-3">
+                    <div class="mt-4">
+                        <h6>数据统计</h6>
+                        <table class="table table-sm">
+                            <tr><td>时间跨度:</td><td><strong>@((EndTime - StartTime).TotalHours.ToString("F1")) 小时</strong></td></tr>
+                            <tr><td>数据点数:</td><td><strong>@TimeRangeData.Sum(t => t.RecordCount)</strong></td></tr>
+                            <tr><td>涉及无人机:</td><td>@TimeRangeData.Count(t => t.Type == "Drone")</td></tr>
+                            <tr><td>涉及任务:</td><td>@TimeRangeData.Count(t => t.Type == "Task")</td></tr>
+                        </table>
+                    </div>
+                }
+            </div>
+
+            <!-- 右侧数据显示 -->
+            <div class="col-md-8">
+                @if (TimeRangeData?.Any() == true || DataPoints?.Any() == true)
+                {
+                    @if (AnalysisType == "timeline")
+                    {
+                        <!-- 时间线视图 -->
+                        <div class="mb-4">
+                            <h6>事件时间线</h6>
+                            <div style="height: 400px; overflow-y: auto;">
+                                @foreach (var timelineEvent in GetTimelineEvents().OrderByDescending(e => e.Timestamp))
+                                {
+                                    <div class="d-flex mb-2 p-2 border-start border-3 border-@GetEventBorderClass(timelineEvent.Type) bg-light rounded">
+                                        <div class="me-3">
+                                            <small class="text-muted">@timelineEvent.Timestamp.ToString("MM-dd HH:mm:ss")</small>
+                                        </div>
+                                        <div class="flex-grow-1">
+                                            <div class="fw-bold">@timelineEvent.Title</div>
+                                            <small class="text-muted">@timelineEvent.Description</small>
+                                        </div>
+                                        <div>
+                                            <span class="badge bg-@GetEventBadgeClass(timelineEvent.Type)">@timelineEvent.Type</span>
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                    else if (AnalysisType == "combined" && DataPoints?.Any() == true)
+                    {
+                        <!-- 综合分析图表 -->
+                        <div class="mb-4">
+                            <h6>综合性能趋势</h6>
+                            <CartesianChart
+                                Height="350"
+                                Series="timeRangeSeries"
+                                XAxes="xAxes"
+                                YAxes="yAxes"
+                                LegendPosition="LegendPosition.Top">
+                            </CartesianChart>
+                        </div>
+                    }
+
+                    <!-- 数据汇总表格 -->
+                    <div class="table-responsive">
                         <h6>数据汇总</h6>
                         <table class="table table-sm table-striped">
-                            <thead>
+                            <thead class="table-dark">
                                 <tr>
-                                    <th>@(AnalysisType == "drones" ? "无人机" : "任务")</th>
+                                    <th>名称</th>
+                                    <th>类型</th>
                                     <th>记录数</th>
-                                    <th>最早时间</th>
-                                    <th>最晚时间</th>
+                                    <th>时间范围</th>
                                     <th>状态分布</th>
+                                    @if (AnalysisType == "drones" || AnalysisType == "combined")
+                                    {
+                                        <th>平均CPU</th>
+                                        <th>平均内存</th>
+                                    }
                                 </tr>
                             </thead>
                             <tbody>
-                                @foreach (var item in TimeRangeData)
+                                @foreach (var item in TimeRangeData.Take(50))
                                 {
                                     <tr>
-                                        <td>@item.Name</td>
-                                        <td>@item.RecordCount</td>
-                                        <td>@item.EarliestTime.ToString("g")</td>
-                                        <td>@item.LatestTime.ToString("g")</td>
                                         <td>
-                                            @foreach (var status in item.StatusDistribution)
-                                            {
-                                                <span class="badge bg-secondary">@status.Key: @status.Value</span>
-                                            }
+                                            <span class="fw-bold">@item.Name</span>
                                         </td>
+                                        <td>
+                                            <span class="badge bg-@(item.Type == "Drone" ? "info" : "warning")">
+                                                @item.Type
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-primary">@item.RecordCount</span>
+                                        </td>
+                                        <td>
+                                            <small>
+                                                @item.EarliestTime.ToString("MM-dd HH:mm")<br/>
+                                                @item.LatestTime.ToString("MM-dd HH:mm")
+                                            </small>
+                                        </td>
+                                        <td>
+                                            <div class="d-flex flex-wrap gap-1">
+                                                @foreach (var status in item.StatusDistribution.Take(3))
+                                                {
+                                                    <span class="badge bg-secondary" style="font-size: 10px;">
+                                                        @status.Key: @status.Value
+                                                    </span>
+                                                }
+                                                @if (item.StatusDistribution.Count > 3)
+                                                {
+                                                    <span class="text-muted" style="font-size: 10px;">+@(item.StatusDistribution.Count - 3) 更多</span>
+                                                }
+                                            </div>
+                                        </td>
+                                        @if (AnalysisType == "drones" || AnalysisType == "combined")
+                                        {
+                                            <td>
+                                                @if (item.AverageCpuUsage.HasValue)
+                                                {
+                                                    <span class="badge bg-@GetCpuBadgeClass(item.AverageCpuUsage.Value)">
+                                                        @item.AverageCpuUsage.Value.ToString("F1")%
+                                                    </span>
+                                                }
+                                            </td>
+                                            <td>
+                                                @if (item.AverageMemoryUsage.HasValue)
+                                                {
+                                                    <span class="badge bg-@GetMemoryBadgeClass(item.AverageMemoryUsage.Value)">
+                                                        @item.AverageMemoryUsage.Value.ToString("F1")%
+                                                    </span>
+                                                }
+                                            </td>
+                                        }
                                     </tr>
                                 }
                             </tbody>
                         </table>
+                    </div>
+
+                    <!-- 分页显示更多数据 -->
+                    @if (TimeRangeData.Count > 50)
+                    {
+                        <div class="text-center mt-3">
+                            <p class="text-muted">显示前50条记录，共 @TimeRangeData.Count 条</p>
+                            <button class="btn btn-outline-secondary btn-sm" @onclick="ShowAllData">
+                                显示全部数据
+                            </button>
+                        </div>
+                    }
+                }
+                else if (isLoading)
+                {
+                    <div class="text-center py-5">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">加载中...</span>
+                        </div>
+                        <p class="mt-3">正在分析时间范围数据...</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="text-center py-5">
+                        <i class="fas fa-clock fa-3x text-muted mb-3"></i>
+                        <p class="text-muted">请选择时间范围和分析类型，然后点击"分析数据"</p>
                     </div>
                 }
             </div>
         </div>
     </div>
 </div>
+
 @code {
-    [Parameter]
-    public EventCallback<DroneDataRequest> OnDataLoaded { get; set; }
+    [Parameter] public EventCallback<TimeRangeData> OnDataLoaded { get; set; }
+    [Parameter] public EventCallback<List<DroneDataPoint>> OnChartRendered { get; set; }
 
-    //[Parameter]
-    //public EventCallback<DroneDataResponse> OnChartRendered { get; set; }
-
-    private ISeries[] droneSeries = Array.Empty<ISeries>();
+    private ISeries[] timeRangeSeries = Array.Empty<ISeries>();
     private Axis[] xAxes = Array.Empty<Axis>();
     private Axis[] yAxes = Array.Empty<Axis>();
-    public List<Drone> AvailableDrones { get; set; } = new List<Drone>();
-    public List<MainTask> AvailableTasks { get; set; } = new List<MainTask>();
-    public List<SubTask> TaskData { get; set; } = new List<SubTask>(); // 用于存储任务数据
-    public List<DroneDataPoint> DataPoints { get; set; } = new List<DroneDataPoint>(); // 用于存储无人机数据点
-    public List<TimeRangeData> TimeRangeData { get; set; } = new List<TimeRangeData>(); // 用于存储时间范围数据点
-    public string SelectedDroneId { get; set; } = "1"; // 默认选择第一个无人机
-    public string AnalysisType { get; set; } = "recent"; // 默认分析类型
-    public int Hours { get; set; } = 24; // 默认时间段为24小时
-    public string SelectedTaskId { get; set; } = ""; // 默认无特定任务选择
-    public DateTime StartTime { get; set; } = DateTime.Now.AddDays(-1); // 默认开始时间为1天前
-    public DateTime EndTime { get; set; } = DateTime.Now; // 默认结束时间为当前时间
+    
+    private List<TimeRangeData> TimeRangeData { get; set; } = new();
+    private List<DroneDataPoint> DataPoints { get; set; } = new();
+    
+    private DateTime StartTime { get; set; } = DateTime.Now.AddDays(-1);
+    private DateTime EndTime { get; set; } = DateTime.Now;
+    private string AnalysisType { get; set; } = "drones";
+    private string DataGranularity { get; set; } = "raw";
+    private bool isLoading = false;
+    private bool showAllData = false;
 
-
-    // 数据属性和方法...
-    private void LoadData()
+    protected override void OnParametersSet()
     {
-        var request = new DroneDataRequest { model = 1, drone = Guid.Parse(SelectedDroneId), timeSpan = TimeSpan.FromHours(Hours) };
-        // 填充请求参数
-        OnDataLoaded.InvokeAsync(request);
+        if (DataPoints?.Any() == true && AnalysisType == "combined")
+        {
+            RenderCombinedChart();
+        }
     }
-    private void RenderDroneChart(List<DroneDataPoint> data)
+
+    private void SetQuickRange(int hours)
     {
+        EndTime = DateTime.Now;
+        StartTime = EndTime.AddHours(-hours);
+        StateHasChanged();
+    }
+
+    private async Task LoadData()
+    {
+        if (StartTime >= EndTime)
+        {
+            return;
+        }
+
+        isLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            var request = new TimeRangeData
+            {
+                StartTime = StartTime,
+                EndTime = EndTime,
+                Type = AnalysisType,
+                Name = DataGranularity
+            };
+
+            await OnDataLoaded.InvokeAsync(request);
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void RenderCombinedChart()
+    {
+        if (DataPoints == null || !DataPoints.Any()) return;
+
+        var sortedData = DataPoints.OrderBy(d => d.Timestamp).ToList();
+
         xAxes = new[]
         {
             new Axis
             {
-                Labeler = value => new DateTime((long)value).ToString("HH:mm"),
-                LabelsRotation = 15,
-                UnitWidth = TimeSpan.FromMinutes(1).Ticks
+                Labeler = value => new DateTime((long)value).ToString("MM-dd HH:mm"),
+                LabelsRotation = 45,
+                UnitWidth = TimeSpan.FromMinutes(30).Ticks,
+                Name = "时间"
             }
         };
 
         yAxes = new[]
         {
-            new Axis { Name = "cpu" },
-            new Axis { Name = "memoryUsage", ShowSeparatorLines = false, Position = LiveChartsCore.Measure.AxisPosition.End }
+            new Axis { Name = "使用率 (%)", Position = LiveChartsCore.Measure.AxisPosition.Start },
+            new Axis { Name = "数量", Position = LiveChartsCore.Measure.AxisPosition.End }
         };
 
-        droneSeries = new ISeries[]
+        timeRangeSeries = new ISeries[]
         {
             new LineSeries<decimal>
             {
-                Name = "cpu",
-                Values = data.Select(d => (decimal)d.cpuUsage).ToList(),
-                Stroke = new LiveChartsCore.SkiaSharpView.Painting.SolidColorPaint(SKColors.DarkGreen) { StrokeThickness = 2 },
+                Name = "平均CPU使用率",
+                Values = sortedData.Select(d => (decimal)d.cpuUsage).ToArray(),
+                Stroke = new SolidColorPaint(SKColors.Red) { StrokeThickness = 2 },
                 Fill = null,
-                GeometrySize = 0,
-                YToolTipLabelFormatter = point => $"{point.Model:N1}%"
+                GeometrySize = 3,
+                YToolTipLabelFormatter = point => $"{point.Model:F1}%"
             },
             new LineSeries<decimal>
             {
-                Name = "memoryUsage",
-                Values = data.Select(d => (decimal)d.memoryUsage).ToList(),
+                Name = "平均内存使用率",
+                Values = sortedData.Select(d => (decimal)d.memoryUsage).ToArray(),
                 Stroke = new SolidColorPaint(SKColors.Blue) { StrokeThickness = 2 },
                 Fill = null,
-                GeometrySize = 0,
-                ScalesYAt = 1, // 使用第二个Y轴
-                YToolTipLabelFormatter = point => $"{point.Model:N1}米"
+                GeometrySize = 3,
+                YToolTipLabelFormatter = point => $"{point.Model:F1}%"
             }
+        };
+
+        StateHasChanged();
+    }
+
+    private List<TimelineEvent> GetTimelineEvents()
+    {
+        var events = new List<TimelineEvent>();
+        
+        // 从TimeRangeData生成时间线事件
+        foreach (var data in TimeRangeData)
+        {
+            events.Add(new TimelineEvent
+            {
+                Timestamp = data.EarliestTime,
+                Title = $"{data.Name} 开始活动",
+                Description = $"记录了 {data.RecordCount} 条数据",
+                Type = data.Type
+            });
+            
+            if (data.LatestTime != data.EarliestTime)
+            {
+                events.Add(new TimelineEvent
+                {
+                    Timestamp = data.LatestTime,
+                    Title = $"{data.Name} 最后活动",
+                    Description = $"状态: {string.Join(", ", data.StatusDistribution.Keys)}",
+                    Type = data.Type
+                });
+            }
+        }
+        
+        return events;
+    }
+
+    private Task ExportTimeRangeReport()
+    {
+        // 实现时间范围报告导出功能
+        return Task.CompletedTask;
+    }
+
+    private void ShowAllData()
+    {
+        showAllData = true;
+        StateHasChanged();
+    }
+
+    private string GetEventBorderClass(string eventType)
+    {
+        return eventType switch
+        {
+            "Drone" => "info",
+            "Task" => "warning",
+            _ => "secondary"
         };
     }
 
+    private string GetEventBadgeClass(string eventType)
+    {
+        return eventType switch
+        {
+            "Drone" => "info",
+            "Task" => "warning",
+            _ => "secondary"
+        };
+    }
+
+    private string GetCpuBadgeClass(decimal cpu)
+    {
+        return cpu switch
+        {
+            >= 80 => "danger",
+            >= 60 => "warning",
+            >= 40 => "info",
+            _ => "success"
+        };
+    }
+
+    private string GetMemoryBadgeClass(decimal memory)
+    {
+        return memory switch
+        {
+            >= 85 => "danger",
+            >= 70 => "warning",
+            >= 50 => "info",
+            _ => "success"
+        };
+    }
+
+    // 辅助类
+    private class TimelineEvent
+    {
+        public DateTime Timestamp { get; set; }
+        public string Title { get; set; } = "";
+        public string Description { get; set; } = "";
+        public string Type { get; set; } = "";
+    }
 }

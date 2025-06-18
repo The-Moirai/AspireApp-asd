@@ -7,7 +7,7 @@ namespace ClassLibrary_Core.Data
         public Guid drone { get; set; }
         public DateTime? startTime { get; set; }
         public DateTime? endTime { get; set; }
-        public string? taskId { get; set; }
+        public Guid? taskId { get; set; }
         public TimeSpan timeSpan { get; set; }
 
     }

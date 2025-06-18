@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using ClassLibrary_Core.Drone;
 using ClassLibrary_Core.Mission;
+using ClassLibrary_Core.Common;
 using System.Text.Json;
 
 namespace WebApplication.Data

@@ -493,7 +493,6 @@ namespace WebApplication_Drone.Services
                     cpu_used_rate = cpuUsedRate[i],
                     memory = memory[i],
                     left_bandwidth = leftBandwidth[i],
-                    radius = radius[i]
                 });
             }
                 

@@ -22,7 +22,7 @@ namespace WebApplication_Drone.Controllers
             return Ok(drones);
         }
 
-        [HttpGet("{id:int}")]
+        [HttpGet("{id:Guid}")]
         public ActionResult<Drone> Get(Guid id)
         {
             var drone = _droneDataService.GetDrone(id);
@@ -34,14 +34,14 @@ namespace WebApplication_Drone.Controllers
             _droneDataService.AddDrone(drone);
             return CreatedAtAction(nameof(Get), new { id = drone.Id }, drone);
         }
-        [HttpPut("{id:int}")]
-        public IActionResult Update(int id, Drone updated)
+        [HttpPut("{id:Guid}")]
+        public IActionResult Update(Guid id, Drone updated)
         {
             var result = _droneDataService.UpdateDrone(updated);
             return result ? Ok(updated) : NotFound();
         }
 
-        [HttpDelete("{id:int}")]
+        [HttpDelete("{id:Guid}")]
         public IActionResult Delete(Guid id)
         {
             var result = _droneDataService.DeleteDrone(id);
