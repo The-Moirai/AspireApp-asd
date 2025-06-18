@@ -17,14 +17,19 @@ builder.Services.AddRazorComponents()
     .AddInteractiveWebAssemblyComponents();
 
 ///<summary>
-///���������ݲ�������
+///锟斤拷锟斤拷锟斤拷锟斤拷锟捷诧拷锟斤拷锟斤拷锟斤拷
 ///</summary>
 builder.Services.AddHttpClient("ApiService", client =>
 {
-    client.BaseAddress = new Uri("https://apisercie-drone/"); // Aspire ��������ʵ��API��ַ
+    client.BaseAddress = new Uri("https://apisercie-drone/"); // Aspire 锟斤拷锟斤拷锟斤拷锟斤拷实锟斤拷API锟斤拷址
 });
 
-//���ݶ�ʱ���ͷ���
+
+//锟斤拷锟捷讹拷时锟斤拷锟酵凤拷锟斤拷
+// 添加数据服务
+builder.Services.AddScoped<HistoryApiService>();
+//数据定时推送服务
+
 builder.Services.AddHostedService<DronePushBackgroundService>();
 builder.Services.AddHostedService<TaskPushBackgroundService>();
 var app = builder.Build();
@@ -47,7 +52,7 @@ app.UseHttpsRedirection();
 
 app.UseStaticFiles();
 app.UseAntiforgery();
-app.MapStaticAssets();  // ӳ��WebAssembly��̬��Դ
+app.MapStaticAssets();  // 映锟斤拷WebAssembly锟斤拷态锟斤拷源
 app.MapHub<DroneHub>("/droneHub");
 app.MapHub<TaskHub>("/taskshub");
 

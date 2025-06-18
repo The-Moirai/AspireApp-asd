@@ -23,7 +23,7 @@ namespace WebApplication_Drone.Controllers
         }
 
         [HttpGet("{id:int}")]
-        public ActionResult<Drone> Get(int id)
+        public ActionResult<Drone> Get(Guid id)
         {
             var drone = _droneDataService.GetDrone(id);
             return drone is not null ? Ok(drone) : NotFound();
@@ -42,7 +42,7 @@ namespace WebApplication_Drone.Controllers
         }
 
         [HttpDelete("{id:int}")]
-        public IActionResult Delete(int id)
+        public IActionResult Delete(Guid id)
         {
             var result = _droneDataService.DeleteDrone(id);
             return result ? NoContent() : NotFound();

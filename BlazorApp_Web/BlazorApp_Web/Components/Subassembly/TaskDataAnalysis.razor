@@ -1,0 +1,167 @@
+﻿@using ClassLibrary_Core.Data
+@using ClassLibrary_Core.Drone
+@using ClassLibrary_Core.Mission
+@using LiveChartsCore
+@using LiveChartsCore.SkiaSharpView
+@using LiveChartsCore.SkiaSharpView.Painting
+@using SkiaSharp
+<div class="card">
+    <div class="card-header">
+        <h5>任务历史数据分析</h5>
+    </div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-4">
+                <div class="form-group">
+                    <label>选择任务:</label>
+                    <select class="form-control" @bind="SelectedTaskId">
+                        @foreach (var task in AvailableTasks)
+                        {
+                            <option value="@task.Id">@task.Description</option>
+                        }
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>分析类型:</label>
+                    <select class="form-control" @bind="AnalysisType">
+                        <option value="single">单无人机数据</option>
+                        <option value="all">所有无人机数据</option>
+                    </select>
+                </div>
+
+                @if (AnalysisType == "single")
+                {
+                    <div class="form-group">
+                        <label>选择无人机:</label>
+                        <select class="form-control" @bind="SelectedDroneId">
+                            @foreach (var drone in AvailableDrones)
+                            {
+                                <option value="@drone.Id">@drone.Name</option>
+                            }
+                        </select>
+                    </div>
+                }
+
+                <button class="btn btn-primary" @onclick="LoadData">查询</button>
+            </div>
+            <CartesianChart
+                Height="400"
+                Series="droneSeries"
+                XAxes="xAxes"
+                YAxes="yAxes"
+                LegendPosition="LegendPosition.Top">
+            </CartesianChart>
+
+                @if (TaskData?.Any() == true)
+                {
+                    <div class="mt-3">
+                        <h6>任务执行详情</h6>
+                        <table class="table table-sm table-striped">
+                            <thead>
+                                <tr>
+                                    <th>无人机</th>
+                                    <th>开始时间</th>
+                                    <th>结束时间</th>
+                                    <th>状态</th>
+                                    <th>进度</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var item in TaskData)
+                                {
+                                    <tr>
+                                        <td>@item.AssignedDrone</td>
+                                        <td>@item.AssignedTime?.ToString("g")</td>
+                                        <td>@(item.CompletedTime?.ToString("g") ?? "进行中")</td>
+                                        <td>@item.Status</td>
+                                        <td>
+                                            <div class="progress">
+                                                <div class="progress-bar"
+                                                     role="progressbar"
+                                                     aria-valuemin="0"
+                                                     aria-valuemax="100">
+                                                    @item.CompletedTime
+                                                </div>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+}
+@code {
+    [Parameter]
+    public EventCallback<DroneDataRequest> OnDataLoaded { get; set; }
+
+    //[Parameter]
+    //public EventCallback<DroneDataResponse> OnChartRendered { get; set; }
+
+    private ISeries[] droneSeries = Array.Empty<ISeries>();
+    private Axis[] xAxes = Array.Empty<Axis>();
+    private Axis[] yAxes = Array.Empty<Axis>();
+    public List<Drone> AvailableDrones { get; set; } = new List<Drone>();
+    public List<MainTask> AvailableTasks { get; set; } = new List<MainTask>();
+    public List<SubTask> TaskData { get; set; } = new List<SubTask>(); // 用于存储任务数据
+    public List<DroneDataPoint> DataPoints { get; set; } = new List<DroneDataPoint>(); // 用于存储无人机数据点
+    public string SelectedDroneId { get; set; } = "1"; // 默认选择第一个无人机
+    public string AnalysisType { get; set; } = "recent"; // 默认分析类型
+    public int Hours { get; set; } = 24; // 默认时间段为24小时
+    public string SelectedTaskId { get; set; } = ""; // 默认无特定任务选择
+
+
+    // 数据属性和方法...
+    private void LoadData()
+    {
+        var request = new DroneDataRequest { model = 1, drone = Guid.Parse(SelectedDroneId), timeSpan = TimeSpan.FromHours(Hours) };
+        // 填充请求参数
+        OnDataLoaded.InvokeAsync(request);
+    }
+    private void RenderDroneChart(List<DroneDataPoint> data)
+    {
+        xAxes = new[]
+        {
+            new Axis
+            {
+                Labeler = value => new DateTime((long)value).ToString("HH:mm"),
+                LabelsRotation = 15,
+                UnitWidth = TimeSpan.FromMinutes(1).Ticks
+            }
+        };
+
+        yAxes = new[]
+        {
+            new Axis { Name = "cpu" },
+            new Axis { Name = "memoryUsage", ShowSeparatorLines = false, Position = LiveChartsCore.Measure.AxisPosition.End }
+        };
+
+        droneSeries = new ISeries[]
+        {
+            new LineSeries<decimal>
+            {
+                Name = "cpu",
+                Values = data.Select(d => (decimal)d.cpuUsage).ToList(),
+                Stroke = new LiveChartsCore.SkiaSharpView.Painting.SolidColorPaint(SKColors.DarkGreen) { StrokeThickness = 2 },
+                Fill = null,
+                GeometrySize = 0,
+                YToolTipLabelFormatter = point => $"{point.Model:N1}%"
+            },
+            new LineSeries<decimal>
+            {
+                Name = "memoryUsage",
+                Values = data.Select(d => (decimal)d.memoryUsage).ToList(),
+                Stroke = new SolidColorPaint(SKColors.Blue) { StrokeThickness = 2 },
+                Fill = null,
+                GeometrySize = 0,
+                ScalesYAt = 1, // 使用第二个Y轴
+                YToolTipLabelFormatter = point => $"{point.Model:N1}米"
+            }
+        };
+    }
+
+}

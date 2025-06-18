@@ -19,7 +19,7 @@
         /// </summary>
         public DateTime CreationTime { get; set; } = DateTime.Now;
         /// <summary>
-        /// 大任务的开始时间
+        /// 大任务的完成时间
         /// </summary>
         public DateTime? CompletedTime { get; set; }
         /// <summary>

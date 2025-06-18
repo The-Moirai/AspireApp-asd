@@ -1,14 +1,21 @@
-﻿using ClassLibrary_Core.Drone;
+﻿using ClassLibrary_Core.Data;
+using ClassLibrary_Core.Drone;
 using ClassLibrary_Core.Mission;
+using Microsoft.Data.SqlClient;
+using System.Threading.Tasks;
 
 namespace WebApplication_Drone.Services
 {
     public class TaskDataService
     {
         private readonly List<MainTask> _tasks = new();
-        private readonly List<MissionHistory> _history = new();
         private readonly object _lock = new();
+        private readonly SqlserverService _sqlserverService;
 
+        public TaskDataService(SqlserverService sqlserverService)
+        {
+            _sqlserverService = sqlserverService;
+        }
 
         /// <summary>
         /// 任务数据变更事件
@@ -22,33 +29,14 @@ namespace WebApplication_Drone.Services
         /// <param name="drone"></param>
         protected virtual void OnDroneChanged(string action, MainTask mainTask)
         {
-            TaskChanged?.Invoke(this, new TaskChangedEventArgs { Action = action, MainTask = mainTask });
-        }
-
-        /// <summary>
-        /// 添加历史记录
-        /// </summary>
-        private void AddHistory(SubTask subTask, string operation)
-        {
-            _history.Add(new MissionHistory
+            TaskChanged?.Invoke(this, new TaskChangedEventArgs
             {
-                SubTaskDescription = subTask.Description,
-                SubTaskId = subTask.Id,
-                Operation = operation,
-                DroneName = subTask.AssignedDrone,
-                Time = DateTime.Now
+                Action = action,
+                MainTask = CloneTask(mainTask) // 深度克隆
             });
         }
-        /// <summary>
-        /// 获取所有历史记录
-        /// </summary>
-        public List<MissionHistory> GetHistory()
-        {
-            lock (_lock)
-            {
-                return _history.ToList();
-            }
-        }
+
+       
         /// <summary>
         /// 获取所有大任务数据的副本
         /// </summary>
@@ -90,13 +78,14 @@ namespace WebApplication_Drone.Services
         /// <param name="task">
         /// 大任务实体
         /// </param>
-        public void AddTask(MainTask task)
+        public void AddTask(MainTask task,string CreatedBy)
         {
             lock (_lock)
             {
                 if (!_tasks.Any(t => t.Id == task.Id))
                     _tasks.Add(task);
                 OnDroneChanged("add",task);
+                _sqlserverService.AddMainTask(task,CreatedBy);
             }
         }
         /// <summary>
@@ -106,7 +95,7 @@ namespace WebApplication_Drone.Services
         /// 大任务实体
         /// </param>
         /// <returns>
-        /// 返回更新成功与否
+        /// 更新成功与否
         /// </returns>
         public bool UpdateTask(MainTask task)
         {
@@ -116,8 +105,11 @@ namespace WebApplication_Drone.Services
                 if (idx >= 0)
                 {
                     _tasks[idx] = task;
+                  
                     // 触发任务变更事件
                     OnDroneChanged("update", task);
+                    //数据库更新操作
+
                     return true;
                 }
                 return false;
@@ -155,9 +147,7 @@ namespace WebApplication_Drone.Services
                 var mainTask = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
                 if (mainTask == null) return false;
                 var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
-                if (subTask == null) return false;
-
-                AddHistory(subTask, "卸载");
+                if (subTask == null) return false;                
                 subTask.AssignedDrone = null;
                 subTask.Status = TaskStatus.WaitingForActivation;
                 subTask.AssignedTime = null;
@@ -179,8 +169,7 @@ namespace WebApplication_Drone.Services
                 if (mainTask == null) return false;
                 var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
                 if (subTask == null) return false;
-
-                AddHistory(subTask, "重装");
+                
                 subTask.AssignedDrone = droneName;
                 subTask.Status = TaskStatus.Running;
                 subTask.AssignedTime = DateTime.Now;
@@ -201,8 +190,7 @@ namespace WebApplication_Drone.Services
                 if (mainTask == null) return false;
                 var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Description == subTasksName);
                 if (subTask == null) return false;
-
-                AddHistory(subTask, "分配");
+                
                 subTask.AssignedDrone = droneName;
                 subTask.Status = TaskStatus.Running;
                 subTask.AssignedTime = DateTime.Now;
@@ -224,7 +212,6 @@ namespace WebApplication_Drone.Services
                 var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Description == subTaskId);
                 if (subTask == null) return false;
 
-                AddHistory(subTask, "完成");
                 subTask.Status = TaskStatus.RanToCompletion;
                 subTask.CompletedTime = DateTime.Now;
                 
@@ -274,7 +261,97 @@ namespace WebApplication_Drone.Services
                 return mainTask?.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
             }
         }
+        /// <summary>
+        /// 子任务装载在主任务
+        /// </summary>
+        /// <param name="mainTaskId">主任务Guid</param>
+        /// <param name="subTask">子任务实体</param>
+        public void addSubTasks(Guid mainTaskId, SubTask subTask)
+        {
+            lock (_lock)
+            {
+                var mainTask = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
+                if (mainTask != null)
+                {
+                    mainTask.SubTasks.Add(subTask);
+                   // 触发任务变更事件
+                    OnDroneChanged("update", mainTask);
+                }
+            }
+        }
+        /// <summary>
+        /// 获取指定无人机在指定任务期间的数据
+        /// </summary>
+        /// <param name="taskId"></param>
+        /// <param name="droneId"></param>
+        /// <returns></returns>
+        /// <exception cref="NotImplementedException"></exception>
+        public async Task<List<DroneDataPoint>> GetTaskDroneDataAsync(Guid taskId, Guid droneId)
+        {
+            // 获取任务时间范围
+            var taskTimeRange = await _sqlserverService.GetTaskTimeRangeAsync(taskId);
+            if (taskTimeRange == null)
+            {
+                return new List<DroneDataPoint>();
+            }
+
+            // 获取无人机在任务时间范围内的数据
+            return await _sqlserverService.GetDroneDataInTimeRangeAsync(
+                droneId,
+                taskTimeRange.StartTime,
+                taskTimeRange.EndTime
+            );
+        }
+        /// <summary>
+        /// 获取指定任务期间所有无人机的数据
+        /// </summary>
+        /// <param name="taskId"></param>
+        /// <returns></returns>
+        /// <exception cref="NotImplementedException"></exception>
+        public async Task<List<DroneDataPoint>> GetTaskAllDronesDataAsync(Guid taskId)
+        {
+            // 获取任务时间范围
+            var taskTimeRange = await _sqlserverService.GetTaskTimeRangeAsync(taskId);
+            if (taskTimeRange == null)
+            {
+                return new List<DroneDataPoint>();
+            }
+
+            // 获取所有无人机在任务时间范围内的数据
+            return await _sqlserverService.GetAllDronesDataInTimeRangeAsync(
+                taskTimeRange.StartTime,
+                taskTimeRange.EndTime
+            );
+        }
+        /// <summary>
+        /// 获取指定时间段内所有无人机的数据
+        /// </summary>
+        /// <param name="startTime"></param>
+        /// <param name="endTime"></param>
+        /// <returns></returns>
+        /// <exception cref="NotImplementedException"></exception>
+        public async Task<List<DroneDataPoint>> GetAllTasksDataInTimeRangeAsync(DateTime startTime, DateTime endTime)
+        {
+            List<DroneDataPoint> recentData = new List<DroneDataPoint>();
+            return recentData;
+        }
+        // 新增：深度克隆方法
+        public static MainTask CloneTask(MainTask task) => new()
+        {
+            Id = task.Id,
+            Description = task.Description,
+            SubTasks = task.SubTasks.Select(CloneSubTask).ToList()
+        };
+
+        private static SubTask CloneSubTask(SubTask st) => new()
+        {
+            Id = st.Id,
+            Description = st.Description,
+            AssignedDrone = st.AssignedDrone,
+            Status = st.Status
+        };
     }
+
     /// <summary>
     /// 无人机数据变更事件参数
     /// </summary>

@@ -1,0 +1,151 @@
+﻿@using ClassLibrary_Core.Data
+@using ClassLibrary_Core.Drone
+@using ClassLibrary_Core.Mission
+@using LiveChartsCore
+@using LiveChartsCore.SkiaSharpView
+@using LiveChartsCore.SkiaSharpView.Painting
+@using SkiaSharp
+<div class="card">
+    <div class="card-header">
+        <h5>时间范围历史数据分析</h5>
+    </div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-4">
+                <div class="form-group">
+                    <label>开始时间:</label>
+                    <input type="datetime-local" class="form-control" @bind="StartTime" />
+                </div>
+
+                <div class="form-group">
+                    <label>结束时间:</label>
+                    <input type="datetime-local" class="form-control" @bind="EndTime" />
+                </div>
+
+                <div class="form-group">
+                    <label>分析类型:</label>
+                    <select class="form-control" @bind="AnalysisType">
+                        <option value="drones">无人机数据</option>
+                        <option value="tasks">任务数据</option>
+                    </select>
+                </div>
+
+                <button class="btn btn-primary" @onclick="LoadData">查询</button>
+            </div>
+
+            <div class="col-md-8">
+                <div class="chart-container">
+                    <canvas id="timeRangeChart"></canvas>
+                </div>
+
+                @if (TimeRangeData?.Any() == true)
+                {
+                    <div class="mt-3">
+                        <h6>数据汇总</h6>
+                        <table class="table table-sm table-striped">
+                            <thead>
+                                <tr>
+                                    <th>@(AnalysisType == "drones" ? "无人机" : "任务")</th>
+                                    <th>记录数</th>
+                                    <th>最早时间</th>
+                                    <th>最晚时间</th>
+                                    <th>状态分布</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var item in TimeRangeData)
+                                {
+                                    <tr>
+                                        <td>@item.Name</td>
+                                        <td>@item.RecordCount</td>
+                                        <td>@item.EarliestTime.ToString("g")</td>
+                                        <td>@item.LatestTime.ToString("g")</td>
+                                        <td>
+                                            @foreach (var status in item.StatusDistribution)
+                                            {
+                                                <span class="badge bg-secondary">@status.Key: @status.Value</span>
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+@code {
+    [Parameter]
+    public EventCallback<DroneDataRequest> OnDataLoaded { get; set; }
+
+    //[Parameter]
+    //public EventCallback<DroneDataResponse> OnChartRendered { get; set; }
+
+    private ISeries[] droneSeries = Array.Empty<ISeries>();
+    private Axis[] xAxes = Array.Empty<Axis>();
+    private Axis[] yAxes = Array.Empty<Axis>();
+    public List<Drone> AvailableDrones { get; set; } = new List<Drone>();
+    public List<MainTask> AvailableTasks { get; set; } = new List<MainTask>();
+    public List<SubTask> TaskData { get; set; } = new List<SubTask>(); // 用于存储任务数据
+    public List<DroneDataPoint> DataPoints { get; set; } = new List<DroneDataPoint>(); // 用于存储无人机数据点
+    public List<TimeRangeData> TimeRangeData { get; set; } = new List<TimeRangeData>(); // 用于存储时间范围数据点
+    public string SelectedDroneId { get; set; } = "1"; // 默认选择第一个无人机
+    public string AnalysisType { get; set; } = "recent"; // 默认分析类型
+    public int Hours { get; set; } = 24; // 默认时间段为24小时
+    public string SelectedTaskId { get; set; } = ""; // 默认无特定任务选择
+    public DateTime StartTime { get; set; } = DateTime.Now.AddDays(-1); // 默认开始时间为1天前
+    public DateTime EndTime { get; set; } = DateTime.Now; // 默认结束时间为当前时间
+
+
+    // 数据属性和方法...
+    private void LoadData()
+    {
+        var request = new DroneDataRequest { model = 1, drone = Guid.Parse(SelectedDroneId), timeSpan = TimeSpan.FromHours(Hours) };
+        // 填充请求参数
+        OnDataLoaded.InvokeAsync(request);
+    }
+    private void RenderDroneChart(List<DroneDataPoint> data)
+    {
+        xAxes = new[]
+        {
+            new Axis
+            {
+                Labeler = value => new DateTime((long)value).ToString("HH:mm"),
+                LabelsRotation = 15,
+                UnitWidth = TimeSpan.FromMinutes(1).Ticks
+            }
+        };
+
+        yAxes = new[]
+        {
+            new Axis { Name = "cpu" },
+            new Axis { Name = "memoryUsage", ShowSeparatorLines = false, Position = LiveChartsCore.Measure.AxisPosition.End }
+        };
+
+        droneSeries = new ISeries[]
+        {
+            new LineSeries<decimal>
+            {
+                Name = "cpu",
+                Values = data.Select(d => (decimal)d.cpuUsage).ToList(),
+                Stroke = new LiveChartsCore.SkiaSharpView.Painting.SolidColorPaint(SKColors.DarkGreen) { StrokeThickness = 2 },
+                Fill = null,
+                GeometrySize = 0,
+                YToolTipLabelFormatter = point => $"{point.Model:N1}%"
+            },
+            new LineSeries<decimal>
+            {
+                Name = "memoryUsage",
+                Values = data.Select(d => (decimal)d.memoryUsage).ToList(),
+                Stroke = new SolidColorPaint(SKColors.Blue) { StrokeThickness = 2 },
+                Fill = null,
+                GeometrySize = 0,
+                ScalesYAt = 1, // 使用第二个Y轴
+                YToolTipLabelFormatter = point => $"{point.Model:N1}米"
+            }
+        };
+    }
+
+}

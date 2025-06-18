@@ -499,7 +499,7 @@ namespace WebApplication_Drone.Services
             {
                 drones.Add(new Drone
                 {
-                    Id = i,
+                    Id = new Guid(),
                     Name = nodesName[i].ToString(),
                     Status = DroneStatus.Idle, // 默认状态
                     CurrentPosition = new GPSPosition(x[i], y[i]),
