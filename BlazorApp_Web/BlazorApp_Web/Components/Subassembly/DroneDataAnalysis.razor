@@ -85,10 +85,10 @@
                                 @foreach (var point in DataPoints)
                                 {
                                     <tr>
-                                        <td>@point.Timestamp.ToString("g")</td>
-                                        <td>@point.cpuUsage.ToString("P1")</td>
-                                        <td>@point.memoryUsage.ToString("P1")</td>
-                                        <td>@point.Latitude.ToString("N6"), @point.Longitude.ToString("N6")</td>
+                                        <td>@point.Timestamp.ToString()</td>
+                                        <td>@point.cpuUsage.ToString()</td>
+                                        <td>@point.memoryUsage.ToString()</td>
+                                        <td>@point.Latitude.ToString(), @point.Longitude.ToString()</td>
                                         <td>@point.Status</td>
                                     </tr>
                                 }

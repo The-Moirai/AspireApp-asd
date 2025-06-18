@@ -88,11 +88,11 @@ else
     private HubConnection? hubConnection;
     private List<Drone> drones = new();
     private string? selectedDroneId;
-    private Drone? SelectedDrone => !string.IsNullOrEmpty(selectedDroneId) && int.TryParse(selectedDroneId, out var id)
+    private Drone? SelectedDrone => !string.IsNullOrEmpty(selectedDroneId) && Guid.TryParse(selectedDroneId, out var id)
         ? drones.FirstOrDefault(d => d.Id == id)
         : null;
     private bool showOnlyConnected = false;
-    private HashSet<int> visibleDroneIds = new();
+    private HashSet<Guid> visibleDroneIds = new();
 
     private void ToggleShowConnected()
     {

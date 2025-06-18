@@ -15,7 +15,7 @@ namespace WebApplication_Drone.Services
         private readonly ILogger<SqlserverService> _logger;
         public SqlserverService()
         {
-            connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__db");
+            connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__app-db");
             _connection = new SqlConnection(connectionString);
 
         }

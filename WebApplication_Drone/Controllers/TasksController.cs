@@ -26,10 +26,10 @@ namespace WebApplication_Drone.Controllers
             var mainTask = _taskDataService.GetTask(id);
             return mainTask is not null ? Ok(mainTask) : NotFound();
         }
-        [HttpPost]
-        public ActionResult<MainTask> Create(MainTask maintask)
+        [HttpPost("{CreateBy:string}")]
+        public ActionResult<MainTask> Create(MainTask maintask,string CreateBy)
         {
-            _taskDataService.AddTask(maintask);
+            _taskDataService.AddTask(maintask,CreateBy);
             return CreatedAtAction(nameof(Get), new { id = maintask.Id }, maintask);
         }
         [HttpPost("upload")]
@@ -57,7 +57,7 @@ namespace WebApplication_Drone.Controllers
                 // 其他字段按需补充
             };
             // 保存任务到数据源
-            _taskDataService.AddTask(task);
+            _taskDataService.AddTask(task,"User");
 
             return Ok();
         }
