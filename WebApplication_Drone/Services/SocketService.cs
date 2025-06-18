@@ -4,7 +4,6 @@ using ClassLibrary_Core.Message;
 using ClassLibrary_Core.Mission;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
@@ -79,7 +78,7 @@ namespace WebApplication_Drone.Services
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError("建立连接时出错: {Message}", ex.Message);
+                    _logger.LogError("Socket_TcpClient was Bad: {Message}", ex.Message);
                     _currentRetry++;
                     await Task.Delay(_retryInterval); // 等待后重试
                 }
@@ -89,7 +88,7 @@ namespace WebApplication_Drone.Services
             if (_currentRetry >= _maxRetries)
             {
                 _logger.LogError("Socket_TcpClient bulid was more than Max");
-                throw new NotImplementedException("当前网络存在问题，请在解决问题后重试");
+                
 
             }
         }
@@ -113,7 +112,7 @@ namespace WebApplication_Drone.Services
         {
             if (_sendQueue.Count >= MaxQueueSize)
             {
-                Debug.WriteLine("发送队列已满，丢弃新消息");
+                _logger.LogWarning("发送队列已满，丢弃新消息");
                 return;
             }
 
@@ -150,7 +149,7 @@ namespace WebApplication_Drone.Services
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"发送失败: {ex.Message}");
+                        _logger.LogError(ex, "发送失败: {Message}", ex.Message);
                         Disconnect();
                         _sendQueue.Enqueue(data); // 重新入队
                         break;
@@ -193,10 +192,8 @@ namespace WebApplication_Drone.Services
             }
             catch (Exception ex)
             {
-
-                Debug.WriteLine($"重连失败: {ex.Message}");
+                _logger.LogError(ex, "重连失败: {Message}", ex.Message);
                 throw new NotImplementedException("当前网络存在问题，请在解决问题后重试");
-
             }
             finally
             {
@@ -237,7 +234,7 @@ namespace WebApplication_Drone.Services
                     if (bytesRead == 0)
                     {
                         // 服务器主动断开
-                        Console.WriteLine("连接已断开");
+                        _logger.LogInformation("连接已断开");
                         if (_autoReconnect && !_isReconnecting)
                         {
                             _ = Task.Run(() => TryConnectAsync(_client.Client.RemoteEndPoint.ToString(), ((System.Net.IPEndPoint)_client.Client.RemoteEndPoint).Port));
@@ -256,7 +253,7 @@ namespace WebApplication_Drone.Services
 
                         // 反序列化为消息对象
                         string json = Encoding.UTF8.GetString(jsonBytes);
-                        Debug.WriteLine(json);
+                        _logger.LogDebug("接收到消息: {Json}", json);
                         var message = JsonSerializer.Deserialize<Message>(json);
                         ProcessMessage(message);
 
@@ -266,7 +263,7 @@ namespace WebApplication_Drone.Services
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"接收消息时出错: {ex.Message}");
+                    _logger.LogError(ex, "接收消息时出错: {Message}", ex.Message);
                     break;
                 }
             }
@@ -311,7 +308,7 @@ namespace WebApplication_Drone.Services
         {
             if (message == null)
             {
-                Console.WriteLine("收到空消息，忽略处理");
+                _logger.LogWarning("收到空消息，忽略处理");
                 return;
             }
             try
@@ -342,13 +339,13 @@ namespace WebApplication_Drone.Services
 
 
                     default:
-                        Console.WriteLine($"未知消息类型: {message.type}");
+                        _logger.LogWarning("未知消息类型: {MessageType}", message.type);
                         break;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"处理消息时发生错误: {ex.Message}");
+                _logger.LogError(ex, "处理消息时发生错误: {Message}", ex.Message);
             }
         }
         /// <summary>
@@ -362,7 +359,7 @@ namespace WebApplication_Drone.Services
                 !content.TryGetValue("task_name", out var taskList) ||
                 !content.TryGetValue("new_node_name", out var newNodeList))
             {
-                Console.WriteLine("reassign_info 消息字段不完整，忽略处理。");
+                _logger.LogWarning("reassign_info 消息字段不完整，忽略处理");
                 return;
             }
 
@@ -375,7 +372,7 @@ namespace WebApplication_Drone.Services
                 string taskDesc = (taskList[i] as JsonElement?)?.GetString() ?? "未知";
                 string newNode = (newNodeList[i] as JsonElement?)?.GetString() ?? "未知";
 
-                Console.WriteLine($"任务 '{taskDesc}' 的子任务 '{subtaskDesc}' 已从节点 '{oldNode}' 重新分配到节点 '{newNode}'");
+                _logger.LogInformation("任务 '{TaskDesc}' 的子任务 '{SubtaskDesc}' 已从节点 '{OldNode}' 重新分配到节点 '{NewNode}'", taskDesc, subtaskDesc, oldNode, newNode);
 
                 // 1. 同步到 TaskDataService
                 var mainTask = _taskDataService.GetTasks().FirstOrDefault(t => t.Description == taskDesc);
@@ -522,7 +519,7 @@ namespace WebApplication_Drone.Services
             if (sender == "Delete")
             {
                 // 删除无人机的处理逻辑
-                _logger.LogInformation($"无人机 {e.Drone.Name} 已被删除。");
+                _logger.LogInformation($"Drone {e.Drone.Name} Delete。");
                 SendMessageAsync(new Message_Send
                 {
                     content = e.Drone.Name,
@@ -532,12 +529,12 @@ namespace WebApplication_Drone.Services
             else if (sender == "Update")
             {
                 // 更新无人机的处理逻辑
-                _logger.LogInformation($"无人机 {e.Drone.Name} 状态已更新为 {e.Drone.Status}。");
+                _logger.LogInformation($"Drone {e.Drone.Name} update Status {e.Drone.Status}。");
             }
             else if (sender == "Add")
             {
                 // 添加无人机的处理逻辑
-                _logger.LogInformation($"新无人机 {e.Drone.Name} 已添加。");
+                _logger.LogInformation($"Drone was add {e.Drone.Name} 。");
             }
             else
             { }
@@ -554,12 +551,12 @@ namespace WebApplication_Drone.Services
             {
              
                 // 删除任务的处理逻辑
-                _logger.LogInformation($"任务 {e.MainTask.Description} 已被删除。");
+                _logger.LogInformation($"Task {e.MainTask.Description} was Delete。");
             }
             else if (sender == "Update")
             {
                 // 更新任务的处理逻辑
-                _logger.LogInformation($"任务 {e.MainTask.Description} 状态已更新。");
+                _logger.LogInformation($"Task {e.MainTask.Description} update。");
             }
             else if (sender == "Add")
             {
@@ -570,7 +567,7 @@ namespace WebApplication_Drone.Services
                     next_node = e.MainTask.Id.ToString()
                 });
                 // 添加任务的处理逻辑
-                _logger.LogInformation($"新任务 {e.MainTask.Description} 已添加。");
+                _logger.LogInformation($"new Task {e.MainTask.Description} Add。");
             }
             else
             { }

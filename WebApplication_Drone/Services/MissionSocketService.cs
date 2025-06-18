@@ -5,8 +5,7 @@ using System.Net.Sockets;
 using System.Net;
 using System.Text;
 using System.Text.Json;
-
-using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using ClassLibrary_Core.Message;
 
 namespace WebApplication_Drone.Services
@@ -19,8 +18,8 @@ namespace WebApplication_Drone.Services
         private string ImagePath;
         private readonly TaskDataService _taskDataService;
         private readonly DroneDataService _droneDataService;
-        private readonly ILogger<SocketService> _logger;
-        public MissionSocketService(TaskDataService taskDataService, DroneDataService droneDataService, ILogger<SocketService> logger)
+        private readonly ILogger<MissionSocketService> _logger;
+        public MissionSocketService(TaskDataService taskDataService, DroneDataService droneDataService, ILogger<MissionSocketService> logger)
         {
             _taskDataService = taskDataService;
             _droneDataService = droneDataService;
@@ -34,12 +33,12 @@ namespace WebApplication_Drone.Services
         {
             _listener = new TcpListener(IPAddress.Any, port);
             _listener.Start();
-            Console.WriteLine($"MissionSocketService started on port {port}");
+            _logger.LogInformation("MissionSocketService started on port {Port}", port);
 
             while (!_stopEvent.WaitOne(0))
             {
                 var client = await _listener.AcceptTcpClientAsync();
-                Console.WriteLine("Client connected");
+                _logger.LogInformation("Client connected");
                 _clients.Add(client);
                 _ = Task.Run(() => HandleClientAsync(client));
             }
@@ -61,7 +60,7 @@ namespace WebApplication_Drone.Services
                     if (bytesRead > 0)
                     {
                         var messageJson = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                        Debug.WriteLine(messageJson);
+                        _logger.LogDebug("接收到消息: {MessageJson}", messageJson);
                         // 反序列化 JSON 为 Mission 对象
                         var message = JsonSerializer.Deserialize<MessageFromNode>(messageJson);
                         if (message != null && message.type == "task_info")
@@ -73,13 +72,13 @@ namespace WebApplication_Drone.Services
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error handling client: {ex.Message}");
+                _logger.LogError(ex, "Error handling client: {Message}", ex.Message);
             }
             finally
             {
                 _clients.Remove(client);
                 client.Close();
-                Console.WriteLine("Client disconnected");
+                _logger.LogInformation("Client disconnected");
             }
         }
 
@@ -134,7 +133,7 @@ namespace WebApplication_Drone.Services
             }
             _clients.Clear();
             _listener?.Stop();
-            Debug.WriteLine("MissionSocketService stopped");
+            _logger.LogInformation("MissionSocketService stopped");
         }
     }
 }

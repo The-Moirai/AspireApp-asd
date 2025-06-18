@@ -3,6 +3,7 @@ using ClassLibrary_Core.Drone;
 using ClassLibrary_Core.Message;
 using ClassLibrary_Core.Mission;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Logging;
 using System.Threading.Tasks;
 using System.Timers;
 namespace WebApplication_Drone.Services
@@ -26,13 +27,18 @@ namespace WebApplication_Drone.Services
         /// </summary>
         private readonly SqlserverService _sqlserverService;
         /// <summary>
+        /// 日志记录器
+        /// </summary>
+        private readonly ILogger<DroneDataService> _logger;
+        /// <summary>
         /// 无人机数据变更事件
         /// </summary>
         public event EventHandler<DroneChangedEventArgs>? DroneChanged;
 
-        public DroneDataService(SqlserverService sqlserverService) 
+        public DroneDataService(SqlserverService sqlserverService, ILogger<DroneDataService> logger) 
         {
             _sqlserverService = sqlserverService;
+            _logger = logger;
         }
       
 
@@ -158,7 +164,7 @@ namespace WebApplication_Drone.Services
                     catch (Exception ex)
                     {
                         // 记录错误但不影响主流程
-                        Console.WriteLine($"数据库同步错误: {ex.Message}");
+                        _logger.LogError(ex, "数据库同步错误: {Message}", ex.Message);
                     }
                 });
             }
@@ -253,7 +259,7 @@ namespace WebApplication_Drone.Services
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"添加无人机数据库同步错误: {ex.Message}");
+                            _logger.LogError(ex, "Sql Server Error: {Message}", ex.Message);
                         }
                     });
                 }
@@ -294,7 +300,7 @@ namespace WebApplication_Drone.Services
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"更新无人机数据库同步错误: {ex.Message}");
+                        _logger.LogError(ex, "Sql Server Wrong: {Message}", ex.Message);
                     }
                 });
 

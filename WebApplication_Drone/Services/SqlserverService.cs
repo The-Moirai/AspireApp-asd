@@ -10,20 +10,32 @@ namespace WebApplication_Drone.Services
 {
     public class SqlserverService
     {
-        private readonly string connectionString;
+        private readonly string _connectionString;
         private readonly SqlConnection _connection;
         private readonly ILogger<SqlserverService> _logger;
+        
         public SqlserverService(ILogger<SqlserverService> logger)
         {
-            connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__app-db");
-            _connection = new SqlConnection(connectionString);
+            _connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__app-db") ?? throw new InvalidOperationException("Connection string not found");
+            _connection = new SqlConnection(_connectionString);
             _logger = logger;
-            _logger.LogInformation(connectionString);
-
+            _logger.LogInformation("SqlserverService initialized with connection string");
         }
+        
+        /// <summary>
+        /// 创建新的数据库连接
+        /// </summary>
+        private async Task<SqlConnection> CreateConnectionAsync()
+        {
+            var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+            return connection;
+        }
+        
         public void run()
         {
             _connection.Open();
+            _logger.LogInformation("Database connection opened successfully");
         }
         // 通用执行方法
         private int ExecuteNonQuery(string sql, params SqlParameter[] parameters)
@@ -64,7 +76,7 @@ namespace WebApplication_Drone.Services
             try
             {
                 foreach (var drone in drones)
-                    await AddOrUpdateDroneAsync(drone, transaction);
+                    await AddOrUpdateDroneAsync(drone, _connection, transaction);
 
                 transaction.Commit();
             }
@@ -75,36 +87,58 @@ namespace WebApplication_Drone.Services
             }
         }
         // 无人机存在检查
-        public async Task<bool> DroneExistsAsync(Guid id)
+        public async Task<bool> DroneExistsAsync(Guid id, SqlConnection? connection = null)
         {
-            var cmd = new SqlCommand("SELECT 1 FROM Drones WHERE Id=@id", _connection);
-            cmd.Parameters.AddWithValue("@id", id);
-            return (await cmd.ExecuteScalarAsync()) != null;
+            var targetConnection = connection ?? await CreateConnectionAsync();
+            var shouldDisposeConnection = connection == null;
+            
+            try
+            {
+                var cmd = new SqlCommand("SELECT 1 FROM Drones WHERE Id=@id", targetConnection);
+                cmd.Parameters.AddWithValue("@id", id);
+                return (await cmd.ExecuteScalarAsync()) != null;
+            }
+            finally
+            {
+                if (shouldDisposeConnection)
+                    targetConnection?.Dispose();
+            }
         }
         // 异步添加/更新无人机
-        public async Task AddOrUpdateDroneAsync(Drone drone, SqlTransaction? transaction = null)
+        public async Task AddOrUpdateDroneAsync(Drone drone, SqlConnection? connection = null, SqlTransaction? transaction = null)
         {
-            var exists = await DroneExistsAsync(drone.Id);
-            var sql = exists
-                ? @"UPDATE Drones SET 
-                    DroneId=@name, 
-                    ModelType=@modelType, 
-                    LastHeartbeat=@now 
-                    WHERE Id=@id"
-                : @"INSERT INTO Drones (Id, DroneId, ModelType, RegistrationDate, LastHeartbeat) 
-                   VALUES (@id, @name, @modelType, @registrationDate, @now)";
-
-            using var cmd = new SqlCommand(sql, _connection, transaction);
-            cmd.Parameters.AddRange(new[]
+            var targetConnection = connection ?? await CreateConnectionAsync();
+            var shouldDisposeConnection = connection == null;
+            
+            try
             {
-                new SqlParameter("@id", drone.Id),
-                new SqlParameter("@name", drone.Name),
-                new SqlParameter("@modelType", drone.ModelStatus.ToString()),
-                new SqlParameter("@registrationDate", exists ? (object)DBNull.Value : DateTime.UtcNow),
-                new SqlParameter("@now", DateTime.UtcNow)
-            });
+                var exists = await DroneExistsAsync(drone.Id, targetConnection);
+                var sql = exists
+                    ? @"UPDATE Drones SET 
+                        DroneId=@name, 
+                        ModelType=@modelType, 
+                        LastHeartbeat=@now 
+                        WHERE Id=@id"
+                    : @"INSERT INTO Drones (Id, DroneId, ModelType, RegistrationDate, LastHeartbeat) 
+                       VALUES (@id, @name, @modelType, @registrationDate, @now)";
 
-            await cmd.ExecuteNonQueryAsync();
+                using var cmd = new SqlCommand(sql, targetConnection, transaction);
+                cmd.Parameters.AddRange(new[]
+                {
+                    new SqlParameter("@id", drone.Id),
+                    new SqlParameter("@name", drone.Name),
+                    new SqlParameter("@modelType", drone.ModelStatus.ToString()),
+                    new SqlParameter("@registrationDate", exists ? (object)DBNull.Value : DateTime.UtcNow),
+                    new SqlParameter("@now", DateTime.UtcNow)
+                });
+
+                await cmd.ExecuteNonQueryAsync();
+            }
+            finally
+            {
+                if (shouldDisposeConnection)
+                    targetConnection?.Dispose();
+            }
         }
         // 完善：获取无人机状态历史
         public async Task<List<DroneDataPoint>> GetDroneStatusHistoryAsync(
@@ -236,24 +270,52 @@ namespace WebApplication_Drone.Services
 
         /// <summary>
         /// 完整同步无人机数据（基本信息 + 状态历史）
+        /// 使用独立连接避免并发冲突
         /// </summary>
         /// <param name="drone">无人机对象</param>
         public async Task FullSyncDroneAsync(Drone drone)
         {
-            using var transaction = _connection.BeginTransaction();
+            // 为每个调用创建独立的连接，避免并发冲突
+            using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+            using var transaction = connection.BeginTransaction();
+            
             try
             {
-                // 1. 更新基本信息
-                await AddOrUpdateDroneAsync(drone, transaction);
+                // 1. 检查无人机是否存在
+                var existsCmd = new SqlCommand("SELECT 1 FROM Drones WHERE Id=@id", connection, transaction);
+                existsCmd.Parameters.AddWithValue("@id", drone.Id);
+                var exists = (await existsCmd.ExecuteScalarAsync()) != null;
 
-                // 2. 记录状态历史（如果不是离线状态）
+                // 2. 更新基本信息
+                var sql = exists
+                    ? @"UPDATE Drones SET 
+                        DroneId=@name, 
+                        ModelType=@modelType, 
+                        LastHeartbeat=@now 
+                        WHERE Id=@id"
+                    : @"INSERT INTO Drones (Id, DroneId, ModelType, RegistrationDate, LastHeartbeat) 
+                       VALUES (@id, @name, @modelType, @registrationDate, @now)";
+
+                using var cmd = new SqlCommand(sql, connection, transaction);
+                cmd.Parameters.AddRange(new[]
+                {
+                    new SqlParameter("@id", drone.Id),
+                    new SqlParameter("@name", drone.Name),
+                    new SqlParameter("@modelType", drone.ModelStatus.ToString()),
+                    new SqlParameter("@registrationDate", exists ? (object)DBNull.Value : DateTime.UtcNow),
+                    new SqlParameter("@now", DateTime.UtcNow)
+                });
+                await cmd.ExecuteNonQueryAsync();
+
+                // 3. 记录状态历史（如果不是离线状态）
                 if (drone.Status != DroneStatus.Offline)
                 {
                     var statusSql = @"
                     INSERT INTO DroneStatusHistory (DroneId, Status, Timestamp, CpuUsage, BandwidthAvailable, MemoryUsage, Latitude, Longitude)
                     VALUES (@DroneId, @Status, @Timestamp, @CpuUsage, @BandwidthAvailable, @MemoryUsage, @Latitude, @Longitude)";
 
-                    using var statusCmd = new SqlCommand(statusSql, _connection, transaction);
+                    using var statusCmd = new SqlCommand(statusSql, connection, transaction);
                     statusCmd.Parameters.AddRange(new[]
                     {
                         new SqlParameter("@DroneId", drone.Id),
@@ -268,12 +330,12 @@ namespace WebApplication_Drone.Services
                     await statusCmd.ExecuteNonQueryAsync();
                 }
 
-                // 3. 同步子任务关联
+                // 4. 同步子任务关联
                 if (drone.AssignedSubTasks.Any())
                 {
                     // 停用当前无人机的所有任务分配
                     var deactivateSql = "UPDATE DroneSubTasks SET IsActive = 0 WHERE DroneId = @DroneId";
-                    using var deactivateCmd = new SqlCommand(deactivateSql, _connection, transaction);
+                    using var deactivateCmd = new SqlCommand(deactivateSql, connection, transaction);
                     deactivateCmd.Parameters.AddWithValue("@DroneId", drone.Id);
                     await deactivateCmd.ExecuteNonQueryAsync();
 
@@ -284,7 +346,7 @@ namespace WebApplication_Drone.Services
                         INSERT INTO DroneSubTasks (DroneId, SubTaskId, AssignmentTime, IsActive)
                         VALUES (@DroneId, @SubTaskId, @AssignmentTime, 1)";
 
-                        using var insertCmd = new SqlCommand(insertSql, _connection, transaction);
+                        using var insertCmd = new SqlCommand(insertSql, connection, transaction);
                         insertCmd.Parameters.AddRange(new[]
                         {
                             new SqlParameter("@DroneId", drone.Id),
@@ -297,9 +359,10 @@ namespace WebApplication_Drone.Services
 
                 transaction.Commit();
             }
-            catch
+            catch (Exception ex)
             {
                 transaction.Rollback();
+                _logger.LogError(ex, "Failed to sync drone {DroneId} to database", drone.Id);
                 throw;
             }
         }

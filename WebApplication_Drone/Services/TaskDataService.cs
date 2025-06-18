@@ -2,6 +2,7 @@
 using ClassLibrary_Core.Drone;
 using ClassLibrary_Core.Mission;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Logging;
 using System.Threading.Tasks;
 
 namespace WebApplication_Drone.Services
@@ -11,10 +12,12 @@ namespace WebApplication_Drone.Services
         private readonly List<MainTask> _tasks = new();
         private readonly object _lock = new();
         private readonly SqlserverService _sqlserverService;
+        private readonly ILogger<TaskDataService> _logger;
 
-        public TaskDataService(SqlserverService sqlserverService)
+        public TaskDataService(SqlserverService sqlserverService, ILogger<TaskDataService> logger)
         {
             _sqlserverService = sqlserverService;
+            _logger = logger;
         }
 
         /// <summary>
@@ -83,7 +86,7 @@ namespace WebApplication_Drone.Services
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"任务数据库同步错误: {ex.Message}");
+                        _logger.LogError(ex, "任务数据库同步错误: {Message}", ex.Message);
                     }
                 });
             }
@@ -112,7 +115,7 @@ namespace WebApplication_Drone.Services
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"添加任务数据库同步错误: {ex.Message}");
+                            _logger.LogError(ex, "添加任务数据库同步错误: {Message}", ex.Message);
                         }
                     });
                 }
@@ -146,7 +149,7 @@ namespace WebApplication_Drone.Services
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"更新任务数据库同步错误: {ex.Message}");
+                            _logger.LogError(ex, "更新任务数据库同步错误: {Message}", ex.Message);
                         }
                     });
 
@@ -183,7 +186,7 @@ namespace WebApplication_Drone.Services
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"删除任务数据库同步错误: {ex.Message}");
+                            _logger.LogError(ex, "删除任务数据库同步错误: {Message}", ex.Message);
                         }
                     });
 
@@ -221,7 +224,7 @@ namespace WebApplication_Drone.Services
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"卸载子任务数据库同步错误: {ex.Message}");
+                        _logger.LogError(ex, "卸载子任务数据库同步错误: {Message}", ex.Message);
                     }
                 });
 
@@ -255,7 +258,7 @@ namespace WebApplication_Drone.Services
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"重装子任务数据库同步错误: {ex.Message}");
+                        _logger.LogError(ex, "重装子任务数据库同步错误: {Message}", ex.Message);
                     }
                 });
 
@@ -287,7 +290,7 @@ namespace WebApplication_Drone.Services
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"分配子任务数据库同步错误: {ex.Message}");
+                        _logger.LogError(ex, "分配子任务数据库同步错误: {Message}", ex.Message);
                     }
                 });
 
@@ -329,7 +332,7 @@ namespace WebApplication_Drone.Services
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"完成子任务数据库同步错误: {ex.Message}");
+                        _logger.LogError(ex, "完成子任务数据库同步错误: {Message}", ex.Message);
                     }
                 });
 
@@ -386,7 +389,7 @@ namespace WebApplication_Drone.Services
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"添加子任务数据库同步错误: {ex.Message}");
+                            _logger.LogError(ex, "添加子任务数据库同步错误: {Message}", ex.Message);
                         }
                     });
                 }
@@ -450,7 +453,7 @@ namespace WebApplication_Drone.Services
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"获取时间范围内数据错误: {ex.Message}");
+                _logger.LogError(ex, "获取时间范围内数据错误: {Message}", ex.Message);
                 return new List<DroneDataPoint>();
             }
         }
@@ -478,7 +481,7 @@ namespace WebApplication_Drone.Services
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"从数据库加载任务错误: {ex.Message}");
+                _logger.LogError(ex, "从数据库加载任务错误: {Message}", ex.Message);
             }
         }
         /// <summary>
@@ -501,7 +504,7 @@ namespace WebApplication_Drone.Services
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"同步任务到数据库错误: {ex.Message}");
+                _logger.LogError(ex, "同步任务到数据库错误: {Message}", ex.Message);
             }
         }
         // 新增：深度克隆方法
@@ -640,7 +643,7 @@ namespace WebApplication_Drone.Services
                                 }
                                 catch (Exception ex)
                                 {
-                                    Console.WriteLine($"批量更新子任务数据库同步错误: {ex.Message}");
+                                    _logger.LogError(ex, "批量更新子任务数据库同步错误: {Message}", ex.Message);
                                 }
                             });
                         }
@@ -707,7 +710,7 @@ namespace WebApplication_Drone.Services
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"重新分配子任务数据库同步错误: {ex.Message}");
+                                _logger.LogError(ex, "重新分配子任务数据库同步错误: {Message}", ex.Message);
                             }
                         });
                     }
@@ -747,7 +750,7 @@ namespace WebApplication_Drone.Services
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"清理旧任务数据库同步错误: {ex.Message}");
+                            _logger.LogError(ex, "清理旧任务数据库同步错误: {Message}", ex.Message);
                         }
                     });
                 }
