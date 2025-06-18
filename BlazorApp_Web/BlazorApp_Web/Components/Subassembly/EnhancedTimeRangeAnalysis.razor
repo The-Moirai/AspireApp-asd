@@ -1,5 +1,6 @@
 @page "/enhanced-time-analysis"
 @using ClassLibrary_Core.Data
+@using Microsoft.AspNetCore.Components
 
 <div class="container-fluid">
     <div class="row">
@@ -104,6 +105,9 @@
 </div>
 
 @code {
+    // 参数
+    [Parameter] public EventCallback<TimeRangeData> OnAnalysisCompleted { get; set; }
+    
     private bool isLoading = false;
     private List<TimeRangeData> analysisDataList = new();
     private List<AnalysisInsight> analysisInsights = new();
@@ -223,6 +227,17 @@
     private async Task ApplyFilters()
     {
         await LoadAnalysisData();
+        await NotifyAnalysisCompleted();
+    }
+
+    private async Task NotifyAnalysisCompleted()
+    {
+        if (OnAnalysisCompleted.HasDelegate && analysisDataList.Any())
+        {
+            // 选择第一个数据集作为分析结果
+            var analysisResult = analysisDataList.First();
+            await OnAnalysisCompleted.InvokeAsync(analysisResult);
+        }
     }
 
     private string GetInsightAlertClass(string level)
