@@ -150,13 +150,14 @@ namespace WebApplication_Drone.Services
                 // 5. 更新快照（保存当前在线无人机）
                 _lastDrones = _drones.Where(d => d.Status != DroneStatus.Offline).Select(CloneDrone).ToList();
 
-                // 6. 异步同步到数据库
+                // 6. 异步同步到数据库 - 创建快照避免集合修改异常
+                var dronesSnapshot = _drones.Select(CloneDrone).ToList();
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        // 完整同步所有无人机数据
-                        foreach (var drone in _drones)
+                        // 完整同步所有无人机数据（使用快照）
+                        foreach (var drone in dronesSnapshot)
                         {
                             await _sqlserverService.FullSyncDroneAsync(drone);
                         }
@@ -187,7 +188,7 @@ namespace WebApplication_Drone.Services
             // 更新其他所有数据
             updatedDrone.ModelStatus = newDrone.ModelStatus;
             updatedDrone.CurrentPosition = newDrone.CurrentPosition;
-            updatedDrone.Status = newDrone.Status;
+            //updatedDrone.Status = newDrone.Status;
             updatedDrone.cpu_used_rate = newDrone.cpu_used_rate;
             updatedDrone.radius = newDrone.radius;
             updatedDrone.left_bandwidth = newDrone.left_bandwidth;
@@ -226,17 +227,80 @@ namespace WebApplication_Drone.Services
         }
         /// <summary>
         /// 添加新的无人机
+        /// 检查数据库中是否存在同名无人机，若存在则将无人机ID与数据库ID同步，其余属性以新无人机为准
         /// </summary>
         /// <param name="drone">无人机实体</param>
         public async void AddDrone(Drone drone)
         {
+            // 首先检查数据库中是否存在同名无人机
+            Drone? databaseDrone = null;
+            try
+            {
+                databaseDrone = await _sqlserverService.GetDroneByNameAsync(drone.Name);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error checking database for drone name {DroneName}: {Message}", drone.Name, ex.Message);
+            }
+
             lock (_lock)
             {
-                var existing = _drones.FirstOrDefault(d => d.Name == drone.Name);
-                if (existing != null) drone.Id = existing.Id;
-
-                if (!_drones.Any(d => d.Id == drone.Id))
+                // 优先使用数据库中的ID，如果数据库中存在同名无人机
+                if (databaseDrone != null)
                 {
+                    _logger.LogInformation("Found existing drone in database with name {DroneName}, using database ID {DatabaseId}", 
+                        drone.Name, databaseDrone.Id);
+                    drone.Id = databaseDrone.Id;
+                }
+                else
+                {
+                    // 如果数据库中不存在，检查内存中是否有同名无人机
+                    var existing = _drones.FirstOrDefault(d => d.Name == drone.Name);
+                    if (existing != null) 
+                    {
+                        drone.Id = existing.Id;
+                        _logger.LogInformation("Found existing drone in memory with name {DroneName}, using memory ID {MemoryId}", 
+                            drone.Name, existing.Id);
+                    }
+                    else
+                    {
+                        // 如果都不存在，生成新的ID
+                        if (drone.Id == Guid.Empty)
+                        {
+                            drone.Id = Guid.NewGuid();
+                            _logger.LogInformation("Generated new ID {NewId} for drone {DroneName}", drone.Id, drone.Name);
+                        }
+                    }
+                }
+
+                // 检查是否已经在内存列表中存在相同ID的无人机
+                var existingById = _drones.FirstOrDefault(d => d.Id == drone.Id);
+                if (existingById != null)
+                {
+                    // 如果存在，更新现有无人机的属性（除了ID和Name）
+                    var updatedDrone = UpdateDroneData(existingById, drone);
+                    var index = _drones.FindIndex(d => d.Id == drone.Id);
+                    _drones[index] = updatedDrone;
+                    OnDroneChanged("Update", updatedDrone);
+                    _logger.LogInformation("Updated existing drone {DroneId} ({DroneName}) with new data", drone.Id, drone.Name);
+                    
+                    // 异步同步到数据库
+                    var droneSnapshot = CloneDrone(updatedDrone);
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await _sqlserverService.FullSyncDroneAsync(droneSnapshot);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Database sync error for updated drone {DroneId}: {Message}", drone.Id, ex.Message);
+                        }
+                    });
+                }
+                else
+                {
+                    // 如果不存在，添加新无人机
                     // 建立新连接
                     var nearby = _drones
                         .Where(d => d.Status != DroneStatus.Offline &&
@@ -249,17 +313,19 @@ namespace WebApplication_Drone.Services
 
                     _drones.Add(drone);
                     OnDroneChanged("Add", drone);
+                    _logger.LogInformation("Added new drone {DroneId} ({DroneName}) to memory", drone.Id, drone.Name);
 
-                    // 异步同步到数据库
+                    // 异步同步到数据库 - 创建快照避免集合修改异常
+                    var droneSnapshot = CloneDrone(drone);
                     _ = Task.Run(async () =>
                     {
                         try
                         {
-                            await _sqlserverService.FullSyncDroneAsync(drone);
+                            await _sqlserverService.FullSyncDroneAsync(droneSnapshot);
                         }
                         catch (Exception ex)
                         {
-                            _logger.LogError(ex, "Sql Server Error: {Message}", ex.Message);
+                            _logger.LogError(ex, "Database sync error for new drone {DroneId}: {Message}", drone.Id, ex.Message);
                         }
                     });
                 }
@@ -287,16 +353,18 @@ namespace WebApplication_Drone.Services
                     // 断开所有连接
                     foreach (var other in _drones)
                         other.ConnectedDroneIds.Remove(drone.Id);
+                    OnDroneChanged("Delete", drone);
                 }
 
                 OnDroneChanged("Update", drone);
 
-                // 异步同步到数据库
+                // 异步同步到数据库 - 创建快照避免集合修改异常
+                var droneSnapshot = CloneDrone(drone);
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        await _sqlserverService.FullSyncDroneAsync(drone);
+                        await _sqlserverService.FullSyncDroneAsync(droneSnapshot);
                     }
                     catch (Exception ex)
                     {

@@ -123,13 +123,11 @@ else
 
         hubConnection.On<List<MainTask>>("ReceiveTaskPosition", ts =>
         {
-            // 只有数据真正变更时才更新UI
-            if (!TasksEqual(tasks, ts))
-            {
+           
                 tasks = ts;
                 InvalidateCache(); // 清除缓存
                 InvokeAsync(StateHasChanged);
-            }
+            
         });
         await hubConnection.StartAsync();
     }

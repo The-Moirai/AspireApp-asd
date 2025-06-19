@@ -398,40 +398,139 @@ namespace WebApplication_Drone.Services
             }
         }
         /// <summary>
-        /// 处理任务信息
+        /// 处理任务分配信息 - 将子任务分配给具体的无人机节点
+        /// content格式: { "节点名": ["子任务名1", "子任务名2", ...] }
         /// </summary>
         /// <param name="content"></param>
         private void HandleTasksInfo(Dictionary<string, List<object>> content)
         {
-            foreach (var item in content)
+            foreach (var nodeAssignment in content)
             {
-                foreach (var mission in item.Value)
+                string nodeName = nodeAssignment.Key; // 无人机节点名
+                var assignedSubTasks = nodeAssignment.Value; // 分配给该节点的子任务列表
+
+                _logger.LogInformation("为节点 '{NodeName}' 分配了 {Count} 个子任务", nodeName, assignedSubTasks.Count);
+
+                foreach (var subTaskObj in assignedSubTasks)
                 {
-                    var missionItem = new MainTask
+                    string subTaskName = subTaskObj.ToString();
+                    
+                    try
                     {
-                        Id = Guid.NewGuid(),
-                        Description = ((JsonElement)mission).GetString(),
-                        Status = TaskStatus.WaitingForActivation,
-                    };
+                        // 解析子任务名称: MainTaskName_GroupIndex_SubTaskIndex
+                        var parts = subTaskName.Split('_');
+                        if (parts.Length < 3)
+                        {
+                            _logger.LogWarning("子任务名称格式错误: {SubTaskName}", subTaskName);
+                            continue;
+                        }
+
+                        // 重构主任务名称 (去掉最后两个部分: _GroupIndex_SubTaskIndex)
+                        string mainTaskName = string.Join("_", parts.Take(parts.Length - 2));
+                        
+                        // 通过描述查找主任务
+                        var mainTask = _taskDataService.GetTasks().FirstOrDefault(t => t.Id == Guid.Parse(mainTaskName));
+                        if (mainTask == null)
+                        {
+                            _logger.LogWarning("MainTask Not Found 未找到主任务: {MainTaskName}", mainTaskName);
+                            continue;
+                        }
+
+                        // 查找子任务
+                        var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Description == subTaskName);
+                        if (subTask == null)
+                        {
+                            _logger.LogWarning("IN MainTask在主任务 '{MainTaskName}' Not Found SubTaskName 中未找到子任务: {SubTaskName}", mainTaskName, subTaskName);
+                            continue;
+                        }
+
+                        // 分配子任务到节点
+                        bool success = _taskDataService.AssignSubTask(mainTask.Id, subTask.Id, nodeName);
+                        if (success)
+                        {
+                            _logger.LogInformation("成功将子任务 '{SubTaskName}' 分配给节点 '{NodeName}'", subTaskName, nodeName);
+                        }
+                        else
+                        {
+                            _logger.LogError("分配子任务 '{SubTaskName}' 到节点 '{NodeName}' 失败", subTaskName, nodeName);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "处理子任务分配时出错: {SubTaskName} -> {NodeName}", subTaskName, nodeName);
+                    }
                 }
             }
         }
         /// <summary>
-        /// 处理子任务信息
+        /// 处理子任务创建信息 - 为已存在的主任务添加子任务
+        /// content格式: { "组名(MainTaskName_GroupIndex)": ["子任务名1", "子任务名2", ...] }
+        /// 注意：主任务必须已经存在，此方法不会自动创建主任务
         /// </summary>
         /// <param name="content"></param>
         private void HandleSubtasksInfo(Dictionary<string, List<object>> content)
         {
-            foreach (KeyValuePair<string, List<object>> kvp in content)
+            foreach (KeyValuePair<string, List<object>> groupInfo in content)
             {
-                for (int i = 0; i < kvp.Value.Count; i++)
+                string groupName = groupInfo.Key; // 组名: MainTaskName_GroupIndex
+                var subTaskNames = groupInfo.Value; // 该组的子任务名称列表
+
+                try
                 {
-                    SubTask mission = new SubTask
+                    // 解析组名获取主任务名称
+                    var groupParts = groupName.Split('_');
+                    if (groupParts.Length < 2)
                     {
-                        Description = kvp.Value[i].ToString(),
-                        Status = TaskStatus.WaitingForActivation,
-                    };
-                    string[] sArray = kvp.Key.Split('_');
+                        _logger.LogWarning("组名格式错误: {GroupName}", groupName);
+                        continue;
+                    }
+
+                    // 重构主任务名称 (去掉最后一个部分: _GroupIndex)
+                    string mainTaskName = string.Join("_", groupParts.Take(groupParts.Length - 1));
+
+                    // 查找已存在的主任务
+                    var mainTask = _taskDataService.GetTask(Guid.Parse(mainTaskName));
+                    if (mainTask == null)
+                    {
+                        _logger.LogError("Not Found MainTask ,the name is: {MainTaskName}，So the subTask is not add。", mainTaskName);
+                        continue;
+                    }
+
+                    // 为该组创建子任务
+                    foreach (var subTaskObj in subTaskNames)
+                    {
+                        string subTaskName = subTaskObj.ToString();
+                        
+                        // 检查子任务是否已存在
+                        if (mainTask.SubTasks.Any(st => st.Description == subTaskName))
+                        {
+                            _logger.LogDebug("子任务已存在: {SubTaskName}", subTaskName);
+                            continue;
+                        }
+
+                        // 创建新的子任务
+                        var subTask = new SubTask
+                        {
+                            Id = Guid.NewGuid(),
+                            Description = subTaskName,
+                            Status = TaskStatus.WaitingForActivation,
+                            CreationTime = DateTime.UtcNow,
+                            ParentTask = mainTask.Id,
+                            ReassignmentCount = 0
+                        };
+
+                        // 添加子任务到主任务
+                        _taskDataService.addSubTasks(mainTask.Id, subTask);
+                        _logger.LogInformation("For MainTaskName :'{MainTaskName}' Add SubTaskName: {SubTaskName} (ID: {SubTaskId})", 
+                            mainTaskName, subTaskName, subTask.Id);
+                    }
+
+                    _logger.LogInformation("为主任务 '{MainTaskName}' 的组 '{GroupName}' 创建了 {Count} 个子任务", 
+                        mainTaskName, groupName, subTaskNames.Count);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "处理子任务组信息时出错: {GroupName}", groupName);
                 }
             }
         }
@@ -516,30 +615,31 @@ namespace WebApplication_Drone.Services
         /// <param name="e"></param>
         private void OnDroneChanged(object? sender, DroneChangedEventArgs e)
         {
-            if (sender == "Delete")
+            if (e.Action == "Delete" || e.Action == "Offline")
             {
-                // 删除无人机的处理逻辑
-                _logger.LogInformation($"Drone {e.Drone.Name} Delete。");
+                // 删除无人机或离线的处理逻辑
+                _logger.LogInformation($"Drone {e.Drone.Name} {e.Action}。");
                 SendMessageAsync(new Message_Send
                 {
                     content = e.Drone.Name,
                     type = "shutdown"
                 });
             }
-            else if (sender == "Update")
+            else if (e.Action == "Update")
             {
                 // 更新无人机的处理逻辑
                 _logger.LogInformation($"Drone {e.Drone.Name} update Status {e.Drone.Status}。");
             }
-            else if (sender == "Add")
+            else if (e.Action == "Add")
             {
                 // 添加无人机的处理逻辑
                 _logger.LogInformation($"Drone was add {e.Drone.Name} 。");
             }
             else
-            { }
-
+            {
+                _logger.LogDebug($"Unknown drone action: {e.Action} for drone {e.Drone.Name}");
             }
+        }
         /// <summary>
         /// 无人机变更事件处理
         /// </summary>
@@ -547,18 +647,18 @@ namespace WebApplication_Drone.Services
         /// <param name="e"></param>
         private void OnTaskChanged(object? sender, TaskChangedEventArgs e)
         {
-            if (sender == "Delete")
+            if (e.Action == "Delete")
             {
              
                 // 删除任务的处理逻辑
                 _logger.LogInformation($"Task {e.MainTask.Description} was Delete。");
             }
-            else if (sender == "Update")
+            else if (e.Action == "Update")
             {
                 // 更新任务的处理逻辑
                 _logger.LogInformation($"Task {e.MainTask.Description} update。");
             }
-            else if (sender == "Add")
+            else if (e.Action == "Add")
             {
                 SendMessageAsync(new Message_Send
                 {

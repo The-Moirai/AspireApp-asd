@@ -26,10 +26,10 @@ namespace WebApplication_Drone.Controllers
             var mainTask = _taskDataService.GetTask(id);
             return mainTask is not null ? Ok(mainTask) : NotFound();
         }
-        [HttpPost("{CreateBy}")]
-        public ActionResult<MainTask> Create(MainTask maintask,string CreateBy)
+        [HttpPost]
+        public ActionResult<MainTask> Create(MainTask maintask)
         {
-            _taskDataService.AddTask(maintask,CreateBy);
+            _taskDataService.AddTask(maintask,"User");
             return CreatedAtAction(nameof(Get), new { id = maintask.Id }, maintask);
         }
         [HttpPost("upload")]

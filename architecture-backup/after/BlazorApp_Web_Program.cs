@@ -7,29 +7,48 @@ using Microsoft.Extensions.DependencyInjection;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// 添加Aspire默认服务
 builder.AddServiceDefaults();
 
+// 添加业务服务配置
+builder.AddBusinessServices();
 
-builder.Services.AddSignalR();
-// Add services to the container.
+// 添加分布式缓存
+builder.AddDistributedCaching();
+
+// 添加SignalR服务
+builder.Services.AddSignalR(options =>
+{
+    options.EnableDetailedErrors = builder.Environment.IsDevelopment();
+    options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+    options.ClientTimeoutInterval = TimeSpan.FromSeconds(30);
+});
+
+// 添加Razor组件服务
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents()
     .AddInteractiveWebAssemblyComponents();
 
-///<summary>
-///锟斤拷锟斤拷锟斤拷锟斤拷锟捷诧拷锟斤拷锟斤拷锟斤拷
-///</summary>
+// 配置HttpClient（使用弹性策略）
 builder.Services.AddHttpClient("ApiService", client =>
 {
-    client.BaseAddress = new Uri("https://apisercie-drone/"); // Aspire
-});
+    client.BaseAddress = new Uri("https://apisercie-drone/"); // Aspire服务发现
+    client.Timeout = TimeSpan.FromSeconds(30);
+})
+.AddStandardResilienceHandler(); // 添加标准弹性处理
 
+// 添加具名HttpClient
+builder.Services.AddHttpClient("HistoryApi", client =>
+{
+    client.BaseAddress = new Uri("https://apisercie-drone/");
+    client.Timeout = TimeSpan.FromSeconds(60); // 历史数据查询可能需要更长时间
+})
+.AddStandardResilienceHandler();
 
-//锟斤拷锟捷讹拷时锟斤拷锟酵凤拷锟斤拷
-// 添加数据服务
+// 注册数据服务（改为Scoped）
 builder.Services.AddScoped<HistoryApiService>();
-//数据定时推送服务
 
+// 注册后台推送服务
 builder.Services.AddHostedService<DronePushBackgroundService>();
 builder.Services.AddHostedService<TaskPushBackgroundService>();
 var app = builder.Build();

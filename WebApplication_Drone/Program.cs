@@ -20,10 +20,10 @@ builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo { Title = "Drone API", Version = "v1" });
 
-    // 添加文件上传支持
+    // 锟斤拷锟斤拷锟侥硷拷锟较达拷支锟斤拷
     c.OperationFilter<SwaggerFileOperationFilter>();
 
-    // 处理IFormFile类型参数
+    // 锟斤拷锟斤拷IFormFile锟斤拷锟酵诧拷锟斤拷
     c.MapType<IFormFile>(() => new OpenApiSchema
     {
         Type = "string",
@@ -31,13 +31,13 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 builder.Services.AddSingleton<SqlserverService>();
-//Api测试时需将socket服务及socket连接服务器的后台服务注释掉
-//socket连接服务器
+//Api锟斤拷锟斤拷时锟借将socket锟斤拷锟斤拷socket锟斤拷锟接凤拷锟斤拷锟斤拷锟侥猴拷台锟斤拷锟斤拷注锟酵碉拷
+//socket锟斤拷锟接凤拷锟斤拷锟斤拷
 builder.Services.AddSingleton<SocketService>();
 builder.Services.AddSingleton<MissionSocketService>();
-//socket连接服务器的后台服务
+//socket锟斤拷锟接凤拷锟斤拷锟斤拷锟侥猴拷台锟斤拷锟斤拷
 builder.Services.AddHostedService<SocketBackgroundService>();
-// 添加数据服务
+// 锟斤拷锟斤拷锟斤拷锟捷凤拷锟斤拷
 builder.Services.AddSingleton<DroneDataService>();
 builder.Services.AddSingleton<TaskDataService>();
 var app = builder.Build();

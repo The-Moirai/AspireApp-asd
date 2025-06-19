@@ -25,8 +25,6 @@
         /// <summary>
         /// 大任务的子任务列表
         /// </summary>
-
-        /// 防止序列化时循环引用
         public List<SubTask> SubTasks { get; set; } = new();
     }
 }

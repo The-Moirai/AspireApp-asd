@@ -74,12 +74,13 @@ namespace WebApplication_Drone.Services
                 _tasks.Clear();
                 _tasks.AddRange(tasks);
 
-                // 异步同步到数据库
+                // 异步同步到数据库 - 创建快照避免集合修改异常
+                var tasksSnapshot = tasks.Select(CloneTask).ToList();
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        foreach (var task in tasks)
+                        foreach (var task in tasksSnapshot)
                         {
                             await _sqlserverService.FullSyncMainTaskAsync(task);
                         }
@@ -104,14 +105,15 @@ namespace WebApplication_Drone.Services
                 if (!_tasks.Any(t => t.Id == task.Id))
                 {
                     _tasks.Add(task);
-                    OnDroneChanged("add", task);
+                    OnDroneChanged("Add", task);
 
-                    // 异步同步到数据库
+                    // 异步同步到数据库 - 创建快照避免集合修改异常
+                    var taskSnapshot = CloneTask(task);
                     _ = Task.Run(async () =>
                     {
                         try
                         {
-                            await _sqlserverService.FullSyncMainTaskAsync(task);
+                            await _sqlserverService.FullSyncMainTaskAsync(taskSnapshot);
                         }
                         catch (Exception ex)
                         {
@@ -140,12 +142,13 @@ namespace WebApplication_Drone.Services
                     _tasks[idx] = task;
                     OnDroneChanged("update", task);
 
-                    // 异步同步到数据库
+                    // 异步同步到数据库 - 创建快照避免集合修改异常
+                    var taskSnapshot = CloneTask(task);
                     _ = Task.Run(async () =>
                     {
                         try
                         {
-                            await _sqlserverService.FullSyncMainTaskAsync(task);
+                            await _sqlserverService.FullSyncMainTaskAsync(taskSnapshot);
                         }
                         catch (Exception ex)
                         {
@@ -213,12 +216,13 @@ namespace WebApplication_Drone.Services
                 subTask.CompletedTime = null;
                 subTask.ReassignmentCount++;
 
-                // 异步同步到数据库
+                // 异步同步到数据库 - 创建快照避免集合修改异常
+                var subTaskSnapshot = CloneSubTask(subTask);
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        await _sqlserverService.UpdateSubTaskAsync(subTask);
+                        await _sqlserverService.UpdateSubTaskAsync(subTaskSnapshot);
                         // 更新DroneSubTasks表，设置IsActive = 0
                         // 这个操作在SqlserverService中的SyncDroneSubTasksAsync中处理
                     }
@@ -248,12 +252,13 @@ namespace WebApplication_Drone.Services
                 subTask.AssignedTime = DateTime.UtcNow;
                 subTask.ReassignmentCount++;
 
-                // 异步同步到数据库
+                // 异步同步到数据库 - 创建快照避免集合修改异常
+                var subTaskSnapshot = CloneSubTask(subTask);
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        await _sqlserverService.UpdateSubTaskAsync(subTask);
+                        await _sqlserverService.UpdateSubTaskAsync(subTaskSnapshot);
                         // 这里应该找到对应的DroneId并更新DroneSubTasks表
                     }
                     catch (Exception ex)
@@ -281,12 +286,13 @@ namespace WebApplication_Drone.Services
                 subTask.Status = TaskStatus.Running;
                 subTask.AssignedTime = DateTime.UtcNow;
 
-                // 异步同步到数据库
+                // 异步同步到数据库 - 创建快照避免集合修改异常
+                var subTaskSnapshot = CloneSubTask(subTask);
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        await _sqlserverService.UpdateSubTaskAsync(subTask);
+                        await _sqlserverService.UpdateSubTaskAsync(subTaskSnapshot);
                     }
                     catch (Exception ex)
                     {
@@ -319,15 +325,18 @@ namespace WebApplication_Drone.Services
                     mainTask.CompletedTime = DateTime.UtcNow;
                 }
 
-                // 异步同步到数据库
+                // 异步同步到数据库 - 创建快照避免集合修改异常
+                var subTaskSnapshot = CloneSubTask(subTask);
+                var mainTaskSnapshot = CloneTask(mainTask);
+                var shouldUpdateMainTask = mainTask.Status == TaskStatus.RanToCompletion;
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        await _sqlserverService.UpdateSubTaskAsync(subTask);
-                        if (mainTask.Status == TaskStatus.RanToCompletion)
+                        await _sqlserverService.UpdateSubTaskAsync(subTaskSnapshot);
+                        if (shouldUpdateMainTask)
                         {
-                            await _sqlserverService.UpdateMainTaskAsync(mainTask);
+                            await _sqlserverService.UpdateMainTaskAsync(mainTaskSnapshot);
                         }
                     }
                     catch (Exception ex)
@@ -375,17 +384,20 @@ namespace WebApplication_Drone.Services
                 {
                     subTask.ParentTask = mainTaskId; // 确保设置父任务ID
                     subTask.CreationTime = DateTime.UtcNow; // 确保设置创建时间
+                    subTask.AssignedTime = DateTime.UtcNow;
+
                     mainTask.SubTasks.Add(subTask);
 
                     // 触发任务变更事件
-                    OnDroneChanged("update", mainTask);
+                    //OnDroneChanged("update", mainTask);
 
-                    // 异步同步到数据库
+                    // 异步同步到数据库 - 创建快照避免集合修改异常
+                    var subTaskSnapshot = CloneSubTask(subTask);
                     _ = Task.Run(async () =>
                     {
                         try
                         {
-                            await _sqlserverService.AddSubTaskAsync(subTask);
+                            await _sqlserverService.AddSubTaskAsync(subTaskSnapshot);
                         }
                         catch (Exception ex)
                         {
@@ -512,6 +524,9 @@ namespace WebApplication_Drone.Services
         {
             Id = task.Id,
             Description = task.Description,
+            Status = task.Status,
+            CreationTime = task.CreationTime,
+            CompletedTime = task.CompletedTime,
             SubTasks = task.SubTasks.Select(CloneSubTask).ToList()
         };
 
@@ -519,8 +534,13 @@ namespace WebApplication_Drone.Services
         {
             Id = st.Id,
             Description = st.Description,
-            AssignedDrone = st.AssignedDrone,
-            Status = st.Status
+            Status = st.Status,
+            CreationTime = st.CreationTime,
+            AssignedTime = st.AssignedTime,
+            CompletedTime = st.CompletedTime,
+            ParentTask = st.ParentTask,
+            ReassignmentCount = st.ReassignmentCount,
+            AssignedDrone = st.AssignedDrone
         };
 
         /// <summary>
@@ -634,12 +654,13 @@ namespace WebApplication_Drone.Services
                             }
                             updatedCount++;
                             
-                            // 异步同步到数据库
+                            // 异步同步到数据库 - 创建快照避免集合修改异常
+                            var subTaskSnapshot = CloneSubTask(subTask);
                             _ = Task.Run(async () =>
                             {
                                 try
                                 {
-                                    await _sqlserverService.UpdateSubTaskAsync(subTask);
+                                    await _sqlserverService.UpdateSubTaskAsync(subTaskSnapshot);
                                 }
                                 catch (Exception ex)
                                 {
@@ -701,12 +722,13 @@ namespace WebApplication_Drone.Services
                         subTask.ReassignmentCount++;
                         reassignedCount++;
                         
-                        // 异步同步到数据库
+                        // 异步同步到数据库 - 创建快照避免集合修改异常
+                        var subTaskSnapshot = CloneSubTask(subTask);
                         _ = Task.Run(async () =>
                         {
                             try
                             {
-                                await _sqlserverService.UpdateSubTaskAsync(subTask);
+                                await _sqlserverService.UpdateSubTaskAsync(subTaskSnapshot);
                             }
                             catch (Exception ex)
                             {
@@ -741,12 +763,13 @@ namespace WebApplication_Drone.Services
                     _tasks.Remove(task);
                     cleanedCount++;
                     
-                    // 异步删除数据库记录
+                    // 异步删除数据库记录 - 使用任务ID快照
+                    var taskId = task.Id;
                     _ = Task.Run(async () =>
                     {
                         try
                         {
-                            await _sqlserverService.DeleteMainTaskAsync(task.Id);
+                            await _sqlserverService.DeleteMainTaskAsync(taskId);
                         }
                         catch (Exception ex)
                         {

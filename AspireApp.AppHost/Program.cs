@@ -16,22 +16,33 @@ var creationScript = $$"""
     USE [{{databaseName}}];
     GO
 
-        -- 无人机表
+    -- 无人机表
     CREATE TABLE Drones (
         Id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
-        DroneId NVARCHAR(50) NOT NULL UNIQUE,  -- 物理无人机ID
-        ModelType NVARCHAR(50) NOT NULL CHECK (ModelType IN ('实体', '虚拟')),
+        Name NVARCHAR(100) NOT NULL,  -- 无人机名称
+        ModelStatus TINYINT NOT NULL CHECK (ModelStatus IN (0, 1)),  -- 0:True, 1:Vm
+        ModelType NVARCHAR(50) NOT NULL DEFAULT '',  -- 模型类型名称（用于显示）
         RegistrationDate DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-         LastHeartbeat DATETIME2 NULL,
-        INDEX IX_Drones_DroneId (DroneId)
+        LastHeartbeat DATETIME2 NULL,
+
+        INDEX IX_Drones_Name (Name),
+        INDEX IX_Drones_ModelStatus (ModelStatus)
     );
+    GO
+
+    -- 添加枚举注释
+    EXEC sp_addextendedproperty 
+        @name = N'MS_Description', @value = '0:True(实体), 1:Vm(虚拟)',
+        @level0type = N'SCHEMA', @level0name = 'dbo',
+        @level1type = N'TABLE', @level1name = 'Drones',
+        @level2type = N'COLUMN', @level2name = 'ModelStatus';
     GO
 
     -- 主任务表
     CREATE TABLE MainTasks (
         Id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
         Description NVARCHAR(500) NOT NULL,
-        Status TINYINT NOT NULL CHECK (Status BETWEEN 0 AND 4),  -- 0-4状态
+        Status TINYINT NOT NULL CHECK (Status BETWEEN 0 AND 4),  -- 0:Pending, 1:InProgress, 2:Completed, 3:Cancelled, 4:Failed
         CreationTime DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
         CompletedTime DATETIME2 NULL,
         CreatedBy NVARCHAR(128) NOT NULL DEFAULT SUSER_SNAME(),
@@ -54,29 +65,30 @@ var creationScript = $$"""
     CREATE TABLE SubTasks (
         Id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
         Description NVARCHAR(500) NOT NULL,
-        Status TINYINT NOT NULL CHECK (Status BETWEEN 0 AND 7),  -- 0-4状态
+        Status TINYINT NOT NULL CHECK (Status BETWEEN 0 AND 7),  -- System.Threading.Tasks.TaskStatus枚举值
         CreationTime DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
         AssignedTime DATETIME2 NULL,
         CompletedTime DATETIME2 NULL,
-        ParentTaskId UNIQUEIDENTIFIER NOT NULL,
+        ParentTask UNIQUEIDENTIFIER NOT NULL,  -- 对应类中的ParentTask字段
         ReassignmentCount INT NOT NULL DEFAULT 0,
+        AssignedDrone NVARCHAR(100) NULL,  -- 分配的无人机名称
 
         -- 外键约束
-        CONSTRAINT FK_SubTasks_MainTasks FOREIGN KEY (ParentTaskId) 
+        CONSTRAINT FK_SubTasks_MainTasks FOREIGN KEY (ParentTask) 
             REFERENCES MainTasks(Id) ON DELETE CASCADE,
 
         -- 索引
-        INDEX IX_SubTasks_ParentTaskId (ParentTaskId),
+        INDEX IX_SubTasks_ParentTask (ParentTask),
         INDEX IX_SubTasks_Status_Completion (Status, CompletedTime),
         INDEX IX_SubTasks_CreationTime (CreationTime DESC),
-        INDEX IX_SubTasks_ParentTask_CreationTime (ParentTaskId, CreationTime),
-        INDEX IX_SubTasks_Status_ParentTask (Status, ParentTaskId)
+        INDEX IX_SubTasks_ParentTask_CreationTime (ParentTask, CreationTime),
+        INDEX IX_SubTasks_Status_ParentTask (Status, ParentTask)
     );
     GO
 
     -- 添加状态枚举注释
     EXEC sp_addextendedproperty 
-        @name = N'MS_Description', @value = '0:Created, 1:WaitingForActivation, 2:WaitingToRun, 3:Running, 4:WaitingForChildrenToComplete, 5:RanToCompletion,6:Canceled,7:Faulted',
+        @name = N'MS_Description', @value = '0:Created, 1:WaitingForActivation, 2:WaitingToRun, 3:Running, 4:WaitingForChildrenToComplete, 5:RanToCompletion, 6:Canceled, 7:Faulted',
         @level0type = N'SCHEMA', @level0name = 'dbo',
         @level1type = N'TABLE', @level1name = 'SubTasks',
         @level2type = N'COLUMN', @level2name = 'Status';
@@ -86,7 +98,7 @@ var creationScript = $$"""
     CREATE TABLE DroneStatusHistory (
         Id BIGINT IDENTITY(1,1) PRIMARY KEY,
         DroneId UNIQUEIDENTIFIER NOT NULL,
-        Status TINYINT NOT NULL,
+        Status TINYINT NOT NULL CHECK (Status BETWEEN 0 AND 5),  -- DroneStatus枚举
         Timestamp DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
         CpuUsage DECIMAL(5,2) NULL,  -- CPU使用率%
         BandwidthAvailable DECIMAL(6,2) NULL,  -- 可用带宽 Mbps
@@ -151,6 +163,7 @@ var creationScript = $$"""
         INDEX IX_SubTaskHistory_DroneTime (DroneId, ChangeTime DESC)
     );
     GO
+
     -------------------------------------------
     -- 2. 自动记录历史触发器
     -------------------------------------------
@@ -186,7 +199,9 @@ var creationScript = $$"""
                  AND IsActive = 1 
                  ORDER BY AssignmentTime DESC),  -- 当前分配的无人机
                 CASE 
-                    WHEN i.Status = 4 THEN '任务失败' 
+                    WHEN i.Status = 7 THEN '任务失败' 
+                    WHEN i.Status = 6 THEN '任务取消'
+                    WHEN i.Status = 5 THEN '任务完成'
                     ELSE '状态更新' 
                 END
             FROM inserted i
@@ -206,8 +221,9 @@ var creationScript = $$"""
 
         -- 新分配任务时更新子任务状态
         UPDATE st
-        SET st.Status = 1,  -- 更新为Assigned
-            st.ReassignmentCount = st.ReassignmentCount + 1
+        SET st.Status = 2,  -- 更新为WaitingToRun
+            st.ReassignmentCount = st.ReassignmentCount + 1,
+            st.AssignedTime = GETUTCDATE()
         FROM SubTasks st
         JOIN inserted i ON st.Id = i.SubTaskId
         WHERE i.IsActive = 1;
@@ -225,7 +241,7 @@ var creationScript = $$"""
         SELECT 
             i.SubTaskId,
             st.Status,  -- 原状态
-            1,          -- 新状态: Assigned
+            2,          -- 新状态: WaitingToRun
             GETUTCDATE(),
             SUSER_SNAME(),
             i.DroneId,

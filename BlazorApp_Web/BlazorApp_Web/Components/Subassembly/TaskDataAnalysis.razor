@@ -225,7 +225,11 @@
             "pending" => "info",
             "failed" => "danger",
             "cancelled" => "secondary",
-            _ => "light"
+            "waitingforactivation" => "primary",
+            "running" => "warning",
+            "rantocompletion" => "success",
+            "faulted" => "danger",
+            _ => "dark"  // 改为dark，确保文字是白色，背景是深色
         };
     }
 } 

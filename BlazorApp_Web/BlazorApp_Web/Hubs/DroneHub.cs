@@ -17,7 +17,7 @@ namespace AspireApp_Drone.BlazorApp_Drone.Hubs
         /// <summary>
         /// 客户端请求将指定无人机设为离线，并同步所有客户端
         /// </summary>
-        public async Task SetDroneOffline(int droneId)
+        public async Task SetDroneOffline(Guid droneId)
         {
             _logger.LogInformation("Hub: 收到请求，设置无人机 {DroneId} 为离线状态。", droneId);
             // 1. 调用API更新无人机状态
