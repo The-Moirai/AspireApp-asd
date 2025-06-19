@@ -254,7 +254,7 @@ var creationScript = $$"""
     """;
 var db = sql.AddDatabase(databaseName)
             .WithCreationScript(creationScript);
-var apiService=builder.AddProject<Projects.WebApplication_Drone>("apisercie-drone")
+var apiService = builder.AddProject<Projects.WebApplication>("webapplication")
     .WithExternalHttpEndpoints()
     .WithReference(cache)
     .WaitFor(cache)
@@ -262,7 +262,8 @@ var apiService=builder.AddProject<Projects.WebApplication_Drone>("apisercie-dron
     .WaitFor(db);
 
 builder.AddProject<Projects.BlazorApp_Web>("blazorapp-web")
-    .WithExternalHttpEndpoints().WithReference(apiService)
+    .WithExternalHttpEndpoints()
+    .WithReference(apiService)
     .WaitFor(apiService)
     .WithReference(cache)
     .WaitFor(cache);

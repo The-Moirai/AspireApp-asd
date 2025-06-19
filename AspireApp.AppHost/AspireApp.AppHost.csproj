@@ -19,8 +19,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\BlazorApp_Web\BlazorApp_Web\BlazorApp_Web.csproj" />
-    <ProjectReference Include="..\WebApplication_Drone\WebApplication_Drone.csproj" />
     <ProjectReference Include="..\WebApplication.Data\WebApplication.Data.csproj" />
+    <ProjectReference Include="..\WebApplication.Service\WebApplication.Service.csproj" />
+    <ProjectReference Include="..\WebApplication\WebApplication.csproj" />
   </ItemGroup>
 
 </Project>

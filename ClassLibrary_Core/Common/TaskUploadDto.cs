@@ -13,5 +13,8 @@ namespace ClassLibrary_Core.Common
         public DateTime CreationTime { get; set; }
         public string FileName { get; set; }
         public byte[] FileContent { get; set; }
+        public DateTime UploadTime { get; set; }
+        public string? VideoFileName { get; set; }
+        public string? VideoFilePath { get; set; }
     }
 }

@@ -21,6 +21,14 @@ namespace ClassLibrary_Core.Drone
         /// </summary>
         public string ModelType { get; set; } = "";
         /// <summary>
+        /// 无人机注册时间
+        /// </summary>
+        public DateTime RegistrationDate { get; set; } = DateTime.UtcNow;
+        /// <summary>
+        /// 最后心跳时间
+        /// </summary>
+        public DateTime LastHeartbeat { get; set; } = DateTime.UtcNow;
+        /// <summary>
         /// 无人机的位置
         /// </summary>
         public GPSPosition? CurrentPosition { get; set; }
