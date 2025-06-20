@@ -28,8 +28,9 @@ builder.Services.AddHttpClient("ApiService", client =>
 //锟斤拷锟捷讹拷时锟斤拷锟酵凤拷锟斤拷
 // 添加数据服务
 builder.Services.AddScoped<HistoryApiService>();
-//数据定时推送服务
+builder.Services.AddScoped<IPythonBackendService, PythonBackendService>();
 
+//数据定时推送服务
 builder.Services.AddHostedService<DronePushBackgroundService>();
 builder.Services.AddHostedService<TaskPushBackgroundService>();
 var app = builder.Build();

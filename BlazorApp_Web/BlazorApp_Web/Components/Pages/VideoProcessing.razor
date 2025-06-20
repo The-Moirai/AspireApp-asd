@@ -1,0 +1,626 @@
+@page "/video-processing"
+@using BlazorApp_Web.Service
+@using Microsoft.AspNetCore.Components.Forms
+@inject IPythonBackendService PythonBackendService
+@inject ILogger<VideoProcessing> Logger
+@inject IJSRuntime JSRuntime
+@inject IHttpClientFactory HttpClientFactory
+@implements IAsyncDisposable
+
+<PageTitle>视频处理与任务管理</PageTitle>
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <h1 class="display-4 text-center mb-4">
+                <i class="bi bi-camera-video"></i> 智能视频处理系统
+            </h1>
+        </div>
+    </div>
+
+    <!-- 集群状态概览 -->
+    <div class="row mb-4">
+        <div class="col-md-4">
+            <div class="card border-primary">
+                <div class="card-header bg-primary text-white">
+                    <h6 class="card-title mb-0">
+                        <i class="bi bi-hdd-network"></i> 集群状态
+                    </h6>
+                </div>
+                <div class="card-body">
+                    @if (clusterInfo != null)
+                    {
+                        <p><strong>总节点数:</strong> @clusterInfo.TotalNodes</p>
+                        <p><strong>活跃节点:</strong> @clusterInfo.ActiveNodes</p>
+                        <p><strong>集群数:</strong> @clusterInfo.Clusters.Count</p>
+                    }
+                    else
+                    {
+                        <p class="text-muted">加载中...</p>
+                    }
+                    <button class="btn btn-sm btn-outline-primary" @onclick="RefreshClusterInfo" disabled="@isRefreshingCluster">
+                        @if (isRefreshingCluster)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        <i class="bi bi-arrow-clockwise"></i> 刷新
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card border-success">
+                <div class="card-header bg-success text-white">
+                    <h6 class="card-title mb-0">
+                        <i class="bi bi-gear"></i> 集群控制
+                    </h6>
+                </div>
+                <div class="card-body">
+                    <div class="mb-2">
+                        <label class="form-label">启动节点数量:</label>
+                        <input type="number" class="form-control form-control-sm" @bind="nodeCountToStart" min="1" max="20" />
+                    </div>
+                    <button class="btn btn-sm btn-success me-2" @onclick="StartNodes" disabled="@isStartingNodes">
+                        @if (isStartingNodes)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        <i class="bi bi-play"></i> 启动节点
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card border-info">
+                <div class="card-header bg-info text-white">
+                    <h6 class="card-title mb-0">
+                        <i class="bi bi-list-task"></i> 任务概览
+                    </h6>
+                </div>
+                <div class="card-body">
+                    <p><strong>总任务数:</strong> @videoTasks.Count</p>
+                    <p><strong>处理中:</strong> @videoTasks.Count(t => t.Status == "processing")</p>
+                    <p><strong>已完成:</strong> @videoTasks.Count(t => t.Status == "completed")</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 视频上传和任务创建 -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i class="bi bi-cloud-upload"></i> 创建视频处理任务
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">选择视频文件:</label>
+                                <InputFile OnChange="OnVideoFileSelected" class="form-control" accept=".mp4,.avi,.mov,.mkv" />
+                                @if (selectedVideoFile != null)
+                                {
+                                    <small class="text-muted">
+                                        文件: @selectedVideoFile.Name (大小: @(selectedVideoFile.Size / 1024 / 1024)MB)
+                                    </small>
+                                }
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">任务名称:</label>
+                                <input type="text" class="form-control" @bind="taskName" placeholder="请输入任务名称" />
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">处理类型:</label>
+                                <select class="form-select" @bind="processingType">
+                                    <option value="face">人脸识别</option>
+                                    <option value="object">物体检测</option>
+                                    <option value="mixed">混合处理</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-6 d-flex align-items-end">
+                            <button class="btn btn-primary" @onclick="CreateVideoTask" disabled="@(isCreatingTask || selectedVideoFile == null || string.IsNullOrWhiteSpace(taskName))">
+                                @if (isCreatingTask)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-2"></span>
+                                    <span>创建中...</span>
+                                }
+                                else
+                                {
+                                    <i class="bi bi-plus-circle"></i> 创建任务
+                                }
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 任务列表和进度监控 -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i class="bi bi-list-ul"></i> 任务监控面板
+                        <button class="btn btn-sm btn-outline-secondary float-end" @onclick="RefreshTaskStatus">
+                            <i class="bi bi-arrow-clockwise"></i> 刷新状态
+                        </button>
+                    </h5>
+                </div>
+                <div class="card-body">
+                    @if (videoTasks.Any())
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>任务名称</th>
+                                        <th>处理类型</th>
+                                        <th>状态</th>
+                                        <th>进度</th>
+                                        <th>子任务</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var task in videoTasks)
+                                    {
+                                        <tr>
+                                            <td>
+                                                <strong>@task.TaskName</strong>
+                                                <br />
+                                                <small class="text-muted">@task.VideoFile</small>
+                                            </td>
+                                            <td>
+                                                <span class="badge @GetProcessingTypeBadge(task.ProcessingType)">
+                                                    @GetProcessingTypeText(task.ProcessingType)
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <span class="badge @GetStatusBadge(task.Status)">
+                                                    @GetStatusText(task.Status)
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <div class="progress" style="height: 20px;">
+                                                    <div class="progress-bar @GetProgressBarClass(task.Status)" 
+                                                         role="progressbar" 
+                                                         style="width: @(task.Progress)%"
+                                                         aria-valuenow="@task.Progress" 
+                                                         aria-valuemin="0" 
+                                                         aria-valuemax="100">
+                                                        @(task.Progress.ToString("F1"))%
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                @task.CompletedSubtasks / @task.TotalSubtasks
+                                            </td>
+                                            <td>
+                                                @if (task.Status == "completed" && !string.IsNullOrEmpty(task.ProcessedImagePath))
+                                                {
+                                                    <button class="btn btn-sm btn-success me-1" @onclick="() => ViewProcessedImages(task)">
+                                                        <i class="bi bi-images"></i> 查看图片
+                                                    </button>
+                                                    <button class="btn btn-sm btn-primary" @onclick="() => GenerateVideo(task)">
+                                                        <i class="bi bi-play-circle"></i> 生成视频
+                                                    </button>
+                                                }
+                                                else if (task.Status == "processing")
+                                                {
+                                                    <button class="btn btn-sm btn-warning" @onclick="() => ViewTaskDetails(task)">
+                                                        <i class="bi bi-info-circle"></i> 查看详情
+                                                    </button>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="text-center py-4">
+                            <i class="bi bi-inbox display-1 text-muted"></i>
+                            <p class="text-muted mt-2">暂无视频处理任务</p>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 模态框：查看处理后的图片 -->
+<div class="modal fade" id="imageModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">处理后的图片 - @selectedTask?.TaskName</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                @if (processedImages.Any())
+                {
+                    <div class="row">
+                        @foreach (var imagePath in processedImages.Take(20))
+                        {
+                            <div class="col-md-3 mb-3">
+                                <img src="@imagePath" class="img-fluid rounded" alt="处理后的图片" />
+                            </div>
+                        }
+                    </div>
+                    @if (processedImages.Count > 20)
+                    {
+                        <p class="text-muted">显示前20张图片，共@processedImages.Count张</p>
+                    }
+                }
+                else
+                {
+                    <p class="text-muted">暂无处理后的图片</p>
+                }
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                <button type="button" class="btn btn-primary" @onclick="DownloadProcessedImages">
+                    <i class="bi bi-download"></i> 下载所有图片
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private DroneClusterInfo? clusterInfo;
+    private List<VideoTask> videoTasks = new();
+    private IBrowserFile? selectedVideoFile;
+    private string taskName = "";
+    private string processingType = "mixed";
+    private int nodeCountToStart = 5;
+
+    private bool isRefreshingCluster = false;
+    private bool isStartingNodes = false;
+    private bool isCreatingTask = false;
+
+    private Timer? statusTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshClusterInfo();
+        
+        // 启动定时器定期刷新任务状态
+        statusTimer = new Timer(async _ => await InvokeAsync(RefreshTaskStatus), null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
+    }
+
+    private async Task RefreshClusterInfo()
+    {
+        isRefreshingCluster = true;
+        try
+        {
+            clusterInfo = await PythonBackendService.GetClusterInfoAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "刷新集群信息失败");
+        }
+        finally
+        {
+            isRefreshingCluster = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task StartNodes()
+    {
+        isStartingNodes = true;
+        try
+        {
+            var result = await PythonBackendService.StartAllNodesAsync(nodeCountToStart);
+            if (result.Success)
+            {
+                await JSRuntime.InvokeVoidAsync("alert", $"成功启动 {result.ActiveNodeCount} 个节点");
+                await RefreshClusterInfo();
+            }
+            else
+            {
+                await JSRuntime.InvokeVoidAsync("alert", $"启动失败: {result.Message}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "启动节点失败");
+            await JSRuntime.InvokeVoidAsync("alert", "启动节点时发生错误");
+        }
+        finally
+        {
+            isStartingNodes = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OnVideoFileSelected(InputFileChangeEventArgs e)
+    {
+        selectedVideoFile = e.File;
+        if (selectedVideoFile != null && string.IsNullOrWhiteSpace(taskName))
+        {
+            taskName = Path.GetFileNameWithoutExtension(selectedVideoFile.Name);
+        }
+        StateHasChanged();
+    }
+
+    private async Task CreateVideoTask()
+    {
+        if (selectedVideoFile == null || string.IsNullOrWhiteSpace(taskName))
+            return;
+
+        isCreatingTask = true;
+        try
+        {
+            // 上传视频文件到服务器
+            var videoPath = await UploadVideoFile(selectedVideoFile);
+            
+            // 调用API创建处理任务
+            var httpClient = HttpClientFactory.CreateClient();
+            var requestBody = new
+            {
+                VideoPath = videoPath,
+                TaskName = taskName,
+                ProcessingType = processingType
+            };
+
+            var response = await httpClient.PostAsJsonAsync("/api/videoapi/create-task", requestBody);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<dynamic>();
+                
+                var newTask = new VideoTask
+                {
+                    TaskName = taskName,
+                    VideoFile = selectedVideoFile.Name,
+                    ProcessingType = processingType,
+                    Status = "processing",
+                    TotalSubtasks = 100,
+                    CompletedSubtasks = 0
+                };
+                
+                videoTasks.Add(newTask);
+                
+                // 重置表单
+                selectedVideoFile = null;
+                taskName = "";
+                
+                await JSRuntime.InvokeVoidAsync("alert", "任务创建成功！");
+            }
+            else
+            {
+                var errorText = await response.Content.ReadAsStringAsync();
+                await JSRuntime.InvokeVoidAsync("alert", $"任务创建失败: {errorText}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "创建视频任务失败");
+            await JSRuntime.InvokeVoidAsync("alert", "创建任务时发生错误");
+        }
+        finally
+        {
+            isCreatingTask = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task<string> UploadVideoFile(IBrowserFile file)
+    {
+        var uploadsPath = Path.Combine("wwwroot", "uploads");
+        if (!Directory.Exists(uploadsPath))
+        {
+            Directory.CreateDirectory(uploadsPath);
+        }
+
+        var fileName = $"{Guid.NewGuid()}_{file.Name}";
+        var filePath = Path.Combine(uploadsPath, fileName);
+
+        using var stream = new FileStream(filePath, FileMode.Create);
+        await file.OpenReadStream(maxAllowedSize: 1024 * 1024 * 500).CopyToAsync(stream); // 500MB limit
+
+        return filePath;
+    }
+
+    private async Task RefreshTaskStatus()
+    {
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient();
+            
+            for (int i = 0; i < videoTasks.Count; i++)
+            {
+                if (videoTasks[i].Status == "processing")
+                {
+                    var response = await httpClient.GetAsync($"/api/videoapi/task-status/{videoTasks[i].TaskName}");
+                    
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var status = await response.Content.ReadFromJsonAsync<TaskStatusResponse>();
+                        if (status != null)
+                        {
+                            videoTasks[i].Status = status.Status;
+                            videoTasks[i].CompletedSubtasks = status.CompletedSubtasks;
+                            videoTasks[i].TotalSubtasks = status.TotalSubtasks;
+                            videoTasks[i].ProcessedImagePath = status.ProcessedImagePath;
+                        }
+                    }
+                }
+            }
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "刷新任务状态失败");
+        }
+    }
+
+    private async Task ViewProcessedImages(VideoTask task)
+    {
+        selectedTask = task;
+        processedImages.Clear();
+        
+        if (!string.IsNullOrEmpty(task.ProcessedImagePath))
+        {
+            // 加载处理后的图片列表
+            var imagesPath = Path.Combine(task.ProcessedImagePath, "*.png");
+            var imageFiles = Directory.GetFiles(task.ProcessedImagePath, "*.png")
+                .OrderBy(f => f)
+                .Select(f => $"/processed/{task.TaskName}/{Path.GetFileName(f)}")
+                .ToList();
+            
+            processedImages.AddRange(imageFiles);
+        }
+        
+        await JSRuntime.InvokeVoidAsync("bootstrap.Modal.getOrCreateInstance", "#imageModal").InvokeVoidAsync("show");
+    }
+
+    private async Task ViewTaskDetails(VideoTask task)
+    {
+        selectedTask = task;
+        await JSRuntime.InvokeVoidAsync("alert", $"任务详情:\n任务名: {task.TaskName}\n状态: {task.Status}\n进度: {task.Progress:F1}%\n子任务: {task.CompletedSubtasks}/{task.TotalSubtasks}");
+    }
+
+    private async Task GenerateVideo(VideoTask task)
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("alert", "开始生成视频，请稍候...");
+            
+            var httpClient = HttpClientFactory.CreateClient();
+            var requestBody = new
+            {
+                TaskName = task.TaskName,
+                FrameRate = 30
+            };
+
+            var response = await httpClient.PostAsJsonAsync("/api/videoapi/generate-video", requestBody);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<VideoGenerationResponse>();
+                if (result != null && result.Success)
+                {
+                    await JSRuntime.InvokeVoidAsync("alert", $"视频生成完成！\n视频路径: {result.VideoUrl}");
+                    
+                    // 打开视频
+                    await JSRuntime.InvokeVoidAsync("window.open", result.VideoUrl, "_blank");
+                }
+                else
+                {
+                    await JSRuntime.InvokeVoidAsync("alert", "视频生成失败");
+                }
+            }
+            else
+            {
+                var errorText = await response.Content.ReadAsStringAsync();
+                await JSRuntime.InvokeVoidAsync("alert", $"视频生成失败: {errorText}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "生成视频失败");
+            await JSRuntime.InvokeVoidAsync("alert", "生成视频时发生错误");
+        }
+    }
+
+    private async Task DownloadProcessedImages()
+    {
+        await JSRuntime.InvokeVoidAsync("alert", "下载功能正在开发中...");
+    }
+
+    // UI辅助方法
+    private string GetStatusBadge(string status) => status switch
+    {
+        "processing" => "bg-warning",
+        "completed" => "bg-success",
+        "failed" => "bg-danger",
+        _ => "bg-secondary"
+    };
+
+    private string GetStatusText(string status) => status switch
+    {
+        "processing" => "处理中",
+        "completed" => "已完成",
+        "failed" => "失败",
+        _ => "未知"
+    };
+
+    private string GetProcessingTypeBadge(string type) => type switch
+    {
+        "face" => "bg-info",
+        "object" => "bg-primary",
+        "mixed" => "bg-success",
+        _ => "bg-secondary"
+    };
+
+    private string GetProcessingTypeText(string type) => type switch
+    {
+        "face" => "人脸识别",
+        "object" => "物体检测",
+        "mixed" => "混合处理",
+        _ => "未知"
+    };
+
+    private string GetProgressBarClass(string status) => status switch
+    {
+        "processing" => "bg-info progress-bar-striped progress-bar-animated",
+        "completed" => "bg-success",
+        "failed" => "bg-danger",
+        _ => "bg-secondary"
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        statusTimer?.Dispose();
+    }
+
+    // 数据模型
+    public class VideoTask
+    {
+        public string TaskName { get; set; } = "";
+        public string VideoFile { get; set; } = "";
+        public string ProcessingType { get; set; } = "";
+        public string Status { get; set; } = "";
+        public int TotalSubtasks { get; set; } = 100;
+        public int CompletedSubtasks { get; set; } = 0;
+        public string ProcessedImagePath { get; set; } = "";
+        
+        public double Progress => TotalSubtasks > 0 ? (double)CompletedSubtasks / TotalSubtasks * 100 : 0;
+    }
+
+    public class TaskStatusResponse
+    {
+        public string TaskName { get; set; } = "";
+        public string Status { get; set; } = "";
+        public int TotalSubtasks { get; set; }
+        public int CompletedSubtasks { get; set; }
+        public string ProcessedImagePath { get; set; } = "";
+    }
+
+    public class VideoGenerationResponse
+    {
+        public bool Success { get; set; }
+        public string VideoUrl { get; set; } = "";
+        public string Message { get; set; } = "";
+    }
+} 
