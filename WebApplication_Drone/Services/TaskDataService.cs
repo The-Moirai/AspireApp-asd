@@ -485,6 +485,9 @@ namespace WebApplication_Drone.Services
                     _tasks.Clear();
                     _tasks.AddRange(dbTasks);
                 }
+                
+                // 加载子任务的图片数据
+                await LoadSubTaskImagesFromDatabaseAsync();
             }
             catch (Exception ex)
             {
@@ -537,8 +540,7 @@ namespace WebApplication_Drone.Services
             ReassignmentCount = st.ReassignmentCount,
             AssignedDrone = st.AssignedDrone,
             ImagePaths = st.ImagePaths.ToList(),
-            Result = st.Result,
-            ProcessingType = st.ProcessingType
+            Images = st.Images.ToList()
         };
 
         /// <summary>
@@ -911,46 +913,49 @@ namespace WebApplication_Drone.Services
             }
         }
 
-        /// <summary>
-        /// 更新子任务的处理结果
-        /// </summary>
-        /// <param name="mainTaskId">大任务的唯一标识符</param>
-        /// <param name="subTaskDescription">子任务的描述信息</param>
-        /// <param name="result">处理结果</param>
-        /// <returns>返回更新成功与否</returns>
-        public bool UpdateSubTaskResult(Guid mainTaskId, string subTaskDescription, string result)
-        {
-            lock (_lock)
-            {
-                var task = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
-                if (task != null)
-                {
-                    var subTask = task.SubTasks.FirstOrDefault(st => st.Description == subTaskDescription);
-                    if (subTask != null)
-                    {
-                        subTask.Result = result;
-                        OnDroneChanged("SubTaskResultUpdated", task);
 
-                        // 异步同步到数据库
-                        var taskSnapshot = CloneTask(task);
+
+        /// <summary>
+        /// 为所有子任务加载数据库中的图片
+        /// </summary>
+        public async Task LoadSubTaskImagesFromDatabaseAsync()
+        {
+            try
+            {
+                _logger.LogInformation("开始从数据库加载子任务图片...");
+                
+                lock (_lock)
+                {
+                    foreach (var task in _tasks)
+                    {
                         _ = Task.Run(async () =>
                         {
-                            try
+                            foreach (var subTask in task.SubTasks)
                             {
-                                await _sqlserverService.FullSyncMainTaskAsync(taskSnapshot);
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.LogError(ex, "更新子任务结果数据库同步错误: {Message}", ex.Message);
+                                try
+                                {
+                                    var images = await _sqlserverService.GetSubTaskImagesAsync(subTask.Id);
+                                    if (images.Any())
+                                    {
+                                        subTask.Images = images;
+                                        _logger.LogDebug("为子任务 {SubTaskId} 加载了 {ImageCount} 张图片", 
+                                            subTask.Id, images.Count);
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogError(ex, "加载子任务图片失败: SubTaskId={SubTaskId}", subTask.Id);
+                                }
                             }
                         });
-
-                        _logger.LogInformation("子任务结果更新成功: TaskId={TaskId}, SubTask={SubTask}, Result={Result}", 
-                            mainTaskId, subTaskDescription, result);
-                        return true;
                     }
                 }
-                return false;
+                
+                _logger.LogInformation("子任务图片加载完成");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "从数据库加载子任务图片失败");
             }
         }
     }
@@ -965,3 +970,4 @@ namespace WebApplication_Drone.Services
         public SubTask SubTask { get; set; } = new SubTask();
     }
 }
+

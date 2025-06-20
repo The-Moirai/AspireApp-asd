@@ -10,7 +10,7 @@ namespace ClassLibrary_Core.Message
     public class MessageFromNode
     {
         public string type { get; set; }
-        public Dictionary<string, string> content { get; set; }
+        public Dictionary<string, object> content { get; set; }
         public string? next_node { get; set; }
     }
 }

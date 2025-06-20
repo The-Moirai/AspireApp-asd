@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using ClassLibrary_Core.Data;
 
 namespace ClassLibrary_Core.Mission
 {
@@ -45,16 +46,43 @@ namespace ClassLibrary_Core.Mission
         /// </summary>
         public string AssignedDrone { get; set; }
         /// <summary>
-        /// 子任务处理结果图片路径列表
+        /// 子任务处理结果图片路径列表（向后兼容）
         /// </summary>
         public List<string> ImagePaths { get; set; } = new List<string>();
+        
         /// <summary>
-        /// 子任务处理结果信息
+        /// 子任务处理结果图片数据列表（存储在数据库中）
         /// </summary>
-        public string? Result { get; set; }
+        public List<SubTaskImage> Images { get; set; } = new List<SubTaskImage>();
+
         /// <summary>
-        /// 子任务的处理类型（人脸识别、物体检测等）
+        /// 获取图片总数（包含文件路径和数据库存储的图片）
         /// </summary>
-        public string? ProcessingType { get; set; }
+        public int GetTotalImageCount()
+        {
+            return (ImagePaths?.Count ?? 0) + (Images?.Count ?? 0);
+        }
+
+        /// <summary>
+        /// 获取所有图片的显示URL列表
+        /// </summary>
+        public List<string> GetAllImageUrls()
+        {
+            var urls = new List<string>();
+            
+            // 添加文件路径（向后兼容）
+            if (ImagePaths?.Any() == true)
+            {
+                urls.AddRange(ImagePaths);
+            }
+            
+            // 添加数据库存储的图片URL
+            if (Images?.Any() == true)
+            {
+                urls.AddRange(Images.OrderBy(img => img.ImageIndex).Select(img => img.GetImageUrl()));
+            }
+            
+            return urls;
+        }
     }
 }

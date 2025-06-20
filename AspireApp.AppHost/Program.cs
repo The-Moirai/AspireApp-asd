@@ -86,6 +86,31 @@ var creationScript = $$"""
     );
     GO
 
+    -- 子任务图片表
+    CREATE TABLE SubTaskImages (
+        Id BIGINT IDENTITY(1,1) PRIMARY KEY,
+        SubTaskId UNIQUEIDENTIFIER NOT NULL,
+        ImageData VARBINARY(MAX) NOT NULL,  -- 图片二进制数据
+        FileName NVARCHAR(255) NOT NULL,  -- 原始文件名
+        FileExtension NVARCHAR(10) NOT NULL,  -- 文件扩展名
+        FileSize BIGINT NOT NULL,  -- 文件大小（字节）
+        ContentType NVARCHAR(100) NOT NULL DEFAULT 'image/png',  -- MIME类型
+        ImageIndex INT NOT NULL DEFAULT 1,  -- 图片序号
+        UploadTime DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),  -- 上传时间
+        Description NVARCHAR(500) NULL,  -- 图片描述
+
+        -- 外键约束
+        CONSTRAINT FK_SubTaskImages_SubTasks FOREIGN KEY (SubTaskId) 
+            REFERENCES SubTasks(Id) ON DELETE CASCADE,
+
+        -- 索引
+        INDEX IX_SubTaskImages_SubTaskId (SubTaskId),
+        INDEX IX_SubTaskImages_UploadTime (UploadTime DESC),
+        INDEX IX_SubTaskImages_SubTask_Index (SubTaskId, ImageIndex),
+        INDEX IX_SubTaskImages_FileInfo (FileName, FileExtension)
+    );
+    GO
+
     -- 添加状态枚举注释
     EXEC sp_addextendedproperty 
         @name = N'MS_Description', @value = '0:Created, 1:WaitingForActivation, 2:WaitingToRun, 3:Running, 4:WaitingForChildrenToComplete, 5:RanToCompletion, 6:Canceled, 7:Faulted',

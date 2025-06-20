@@ -246,48 +246,37 @@
                                                                             <th>分配无人机</th>
                                                                             <th>分配时间</th>
                                                                             <th>完成时间</th>
-                                                                            <th>处理结果</th>
-                                                                            <th>操作</th>
-                                                                        </tr>
-                                                                    </thead>
-                                                                    <tbody>
-                                                                        @foreach (var sub in activeSubTasks)
-                                                                        {
-                                                                            <tr>
-                                                                                <td>@sub.Id.ToString("N")[..8]</td>
-                                                                                <td>@sub.Description</td>
-                                                                                <td>
-                                                                                    <span class="badge @GetTaskStatusBadge(sub.Status)">
-                                                                                        @GetTaskStatusText(sub.Status)
-                                                                                    </span>
-                                                                                </td>
-                                                                                <td>@sub.AssignedDrone</td>
-                                                                                <td>@(sub.AssignedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
-                                                                                <td>@(sub.CompletedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
-                                                                                <td>
-                                                                                    @if (!string.IsNullOrEmpty(sub.Result))
-                                                                                    {
-                                                                                        <span class="badge bg-info">@sub.Result</span>
-                                                                                    }
-                                                                                    else
-                                                                                    {
-                                                                                        <span class="text-muted">-</span>
-                                                                                    }
-                                                                                </td>
-                                                                                <td>
-                                                                                    @if (sub.ImagePaths?.Any() == true)
-                                                                                    {
-                                                                                        <button class="btn btn-sm btn-outline-primary" @onclick="() => ViewSubTaskImage(sub)">
-                                                                                            <i class="bi bi-images"></i> 查看图片 (@sub.ImagePaths.Count)
-                                                                                        </button>
-                                                                                    }
-                                                                                    else
-                                                                                    {
-                                                                                        <span class="text-muted">无图片</span>
-                                                                                    }
-                                                                                </td>
-                                                                            </tr>
-                                                                        }
+                                                                                                                                        <th>操作</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        @foreach (var sub in activeSubTasks)
+                                                        {
+                                                            <tr>
+                                                                <td>@sub.Id.ToString("N")[..8]</td>
+                                                                <td>@sub.Description</td>
+                                                                <td>
+                                                                    <span class="badge @GetTaskStatusBadge(sub.Status)">
+                                                                        @GetTaskStatusText(sub.Status)
+                                                                    </span>
+                                                                </td>
+                                                                <td>@sub.AssignedDrone</td>
+                                                                <td>@(sub.AssignedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
+                                                                <td>@(sub.CompletedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
+                                                                <td>
+                                                                    @if (sub.GetTotalImageCount() > 0)
+                                                                    {
+                                                                        <button class="btn btn-sm btn-outline-primary" @onclick="() => ViewSubTaskImage(sub)">
+                                                                            <i class="bi bi-images"></i> 查看图片 (@sub.GetTotalImageCount())
+                                                                        </button>
+                                                                    }
+                                                                    else
+                                                                    {
+                                                                        <span class="text-muted">无图片</span>
+                                                                    }
+                                                                </td>
+                                                            </tr>
+                                                        }
                                                                     </tbody>
                                                                 </table>
                                                             </div>
@@ -394,48 +383,37 @@
                                                                             <th>分配无人机</th>
                                                                             <th>分配时间</th>
                                                                             <th>完成时间</th>
-                                                                            <th>处理结果</th>
-                                                                            <th>操作</th>
-                                                                        </tr>
-                                                                    </thead>
-                                                                    <tbody>
-                                                                        @foreach (var sub in activeSubTasks)
-                                                                        {
-                                                                            <tr>
-                                                                                <td>@sub.Id.ToString("N")[..8]</td>
-                                                                                <td>@sub.Description</td>
-                                                                                <td>
-                                                                                    <span class="badge @GetTaskStatusBadge(sub.Status)">
-                                                                                        @GetTaskStatusText(sub.Status)
-                                                                                    </span>
-                                                                                </td>
-                                                                                <td>@sub.AssignedDrone</td>
-                                                                                <td>@(sub.AssignedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
-                                                                                <td>@(sub.CompletedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
-                                                                                <td>
-                                                                                    @if (!string.IsNullOrEmpty(sub.Result))
-                                                                                    {
-                                                                                        <span class="badge bg-info">@sub.Result</span>
-                                                                                    }
-                                                                                    else
-                                                                                    {
-                                                                                        <span class="text-muted">-</span>
-                                                                                    }
-                                                                                </td>
-                                                                                <td>
-                                                                                    @if (sub.ImagePaths?.Any() == true)
-                                                                                    {
-                                                                                        <button class="btn btn-sm btn-outline-primary" @onclick="() => ViewSubTaskImage(sub)">
-                                                                                            <i class="bi bi-images"></i> 查看图片 (@sub.ImagePaths.Count)
-                                                                                        </button>
-                                                                                    }
-                                                                                    else
-                                                                                    {
-                                                                                        <span class="text-muted">无图片</span>
-                                                                                    }
-                                                                                </td>
-                                                                            </tr>
-                                                                        }
+                                                                                                                                        <th>操作</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        @foreach (var sub in activeSubTasks)
+                                                        {
+                                                            <tr>
+                                                                <td>@sub.Id.ToString("N")[..8]</td>
+                                                                <td>@sub.Description</td>
+                                                                <td>
+                                                                    <span class="badge @GetTaskStatusBadge(sub.Status)">
+                                                                        @GetTaskStatusText(sub.Status)
+                                                                    </span>
+                                                                </td>
+                                                                <td>@sub.AssignedDrone</td>
+                                                                <td>@(sub.AssignedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
+                                                                <td>@(sub.CompletedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
+                                                                <td>
+                                                                    @if (sub.GetTotalImageCount() > 0)
+                                                                    {
+                                                                        <button class="btn btn-sm btn-outline-primary" @onclick="() => ViewSubTaskImage(sub)">
+                                                                            <i class="bi bi-images"></i> 查看图片 (@sub.GetTotalImageCount())
+                                                                        </button>
+                                                                    }
+                                                                    else
+                                                                    {
+                                                                        <span class="text-muted">无图片</span>
+                                                                    }
+                                                                </td>
+                                                            </tr>
+                                                        }
                                                                     </tbody>
                                                                 </table>
                                                             </div>
@@ -468,20 +446,10 @@
             <div class="modal-body">
                 <!-- 基本信息 -->
                 <div class="row mb-3">
-                    <div class="col-md-6">
+                    <div class="col-md-12">
                         <div class="mb-3">
                             <label class="form-label">任务名称:</label>
                             <input type="text" class="form-control" @bind="videoTaskName" placeholder="请输入任务名称" />
-                        </div>
-                    </div>
-                    <div class="col-md-6">
-                        <div class="mb-3">
-                            <label class="form-label">处理类型:</label>
-                            <select class="form-select" @bind="videoProcessingType">
-                                <option value="face">人脸识别</option>
-                                <option value="object">物体检测</option>
-                                <option value="mixed">混合处理</option>
-                            </select>
                         </div>
                     </div>
                 </div>
@@ -570,19 +538,7 @@
                                     <td><strong>分配无人机:</strong></td>
                                     <td>@selectedSubTask.AssignedDrone</td>
                                 </tr>
-                                <tr>
-                                    <td><strong>处理结果:</strong></td>
-                                    <td>
-                                        @if (!string.IsNullOrEmpty(selectedSubTask.Result))
-                                        {
-                                            <span class="badge bg-info">@selectedSubTask.Result</span>
-                                        }
-                                        else
-                                        {
-                                            <span class="text-muted">暂无结果</span>
-                                        }
-                                    </td>
-                                </tr>
+
                                 <tr>
                                     <td><strong>完成时间:</strong></td>
                                     <td>@(selectedSubTask.CompletedTime?.ToString("yyyy-MM-dd HH:mm:ss") ?? "未完成")</td>
@@ -591,17 +547,20 @@
                         </div>
                     </div>
                     
-                    @if (selectedSubTask?.ImagePaths?.Any() == true)
+                    @if ((selectedSubTask?.GetAllImageUrls() ?? new List<string>()).Any())
                     {
                         <div class="row">
                             <div class="col-12">
-                                <h6>处理结果图片 (共 @selectedSubTask.ImagePaths.Count 张)</h6>
+                                @{
+                                    var allImageUrls = selectedSubTask?.GetAllImageUrls() ?? new List<string>();
+                                }
+                                <h6>处理结果图片 (共 @allImageUrls.Count 张)</h6>
                                 
-                                @if (selectedSubTask.ImagePaths.Count == 1)
+                                @if (allImageUrls.Count == 1)
                                 {
                                     <!-- 单张图片直接显示 -->
                                     <div class="text-center">
-                                        <img src="@selectedSubTask.ImagePaths[0]" 
+                                        <img src="@allImageUrls[0]" 
                                              class="img-fluid rounded border" 
                                              alt="子任务处理结果图片" 
                                              style="max-height: 400px;" />
@@ -612,7 +571,7 @@
                                     <!-- 多张图片轮播显示 -->
                                     <div id="imageCarousel" class="carousel slide" data-bs-ride="carousel">
                                         <div class="carousel-indicators">
-                                            @for (int i = 0; i < selectedSubTask.ImagePaths.Count; i++)
+                                            @for (int i = 0; i < allImageUrls.Count; i++)
                                             {
                                                 var index = i;
                                                 <button type="button" data-bs-target="#imageCarousel" data-bs-slide-to="@index" 
@@ -621,17 +580,17 @@
                                             }
                                         </div>
                                         <div class="carousel-inner">
-                                            @for (int i = 0; i < selectedSubTask.ImagePaths.Count; i++)
+                                            @for (int i = 0; i < allImageUrls.Count; i++)
                                             {
                                                 var index = i;
                                                 <div class="carousel-item @(index == 0 ? "active" : "")">
                                                     <div class="text-center">
-                                                        <img src="@selectedSubTask.ImagePaths[index]" 
+                                                        <img src="@allImageUrls[index]" 
                                                              class="img-fluid rounded border" 
                                                              alt="子任务处理结果图片 @(index + 1)" 
                                                              style="max-height: 400px;" />
                                                         <div class="carousel-caption d-none d-md-block">
-                                                            <h5>图片 @(index + 1) / @selectedSubTask.ImagePaths.Count</h5>
+                                                            <h5>图片 @(index + 1) / @allImageUrls.Count</h5>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -649,16 +608,16 @@
                                 }
                                 
                                 <!-- 图片缩略图列表 -->
-                                @if (selectedSubTask.ImagePaths.Count > 1)
+                                @if (allImageUrls.Count > 1)
                                 {
                                     <div class="mt-3">
                                         <h6>缩略图</h6>
                                         <div class="row">
-                                            @for (int i = 0; i < selectedSubTask.ImagePaths.Count; i++)
+                                            @for (int i = 0; i < allImageUrls.Count; i++)
                                             {
                                                 var index = i;
                                                 <div class="col-md-2 col-sm-3 col-4 mb-2">
-                                                    <img src="@selectedSubTask.ImagePaths[index]" 
+                                                    <img src="@allImageUrls[index]" 
                                                          class="img-thumbnail" 
                                                          alt="缩略图 @(index + 1)" 
                                                          style="height: 80px; object-fit: cover; cursor: pointer;"
@@ -687,11 +646,12 @@
                 <button type="button" class="btn btn-secondary" @onclick="CloseSubTaskImageModal">
                     <i class="bi bi-x-circle"></i> 关闭
                 </button>
-                @if (selectedSubTask != null && selectedSubTask.ImagePaths?.Any() == true)
+                @{ var downloadImageUrls = selectedSubTask?.GetAllImageUrls() ?? new List<string>(); }
+                @if (downloadImageUrls.Any())
                 {
-                    @if (selectedSubTask.ImagePaths.Count == 1)
+                    @if (downloadImageUrls.Count == 1)
                     {
-                        <a href="@selectedSubTask.ImagePaths[0]" download class="btn btn-primary">
+                        <a href="@downloadImageUrls[0]" download class="btn btn-primary">
                             <i class="bi bi-download"></i> 下载图片
                         </a>
                     }
@@ -699,14 +659,14 @@
                     {
                         <div class="btn-group" role="group">
                             <button type="button" class="btn btn-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
-                                <i class="bi bi-download"></i> 下载图片 (@selectedSubTask.ImagePaths.Count)
+                                <i class="bi bi-download"></i> 下载图片 (@downloadImageUrls.Count)
                             </button>
                             <ul class="dropdown-menu">
-                                @for (int i = 0; i < selectedSubTask.ImagePaths.Count; i++)
+                                @for (int i = 0; i < downloadImageUrls.Count; i++)
                                 {
                                     var index = i;
                                     <li>
-                                        <a class="dropdown-item" href="@selectedSubTask.ImagePaths[index]" download>
+                                        <a class="dropdown-item" href="@downloadImageUrls[index]" download>
                                             <i class="bi bi-image"></i> 下载图片 @(index + 1)
                                         </a>
                                     </li>
@@ -749,7 +709,6 @@
     private string videoTaskName = "";
     private string videoTaskDescription = "";
     private IBrowserFile? videoFile;
-    private string videoProcessingType = "mixed";
 
     // 子任务图片查看字段
     private SubTask? selectedSubTask;
@@ -901,7 +860,6 @@
         videoTaskName = "";
         videoTaskDescription = "";
         videoFile = null;
-        videoProcessingType = "mixed";
         
         try
         {
@@ -943,7 +901,7 @@
         videoFile = e.File;
         if (videoFile != null && string.IsNullOrWhiteSpace(videoTaskName))
         {
-            videoTaskName = Path.GetFileNameWithoutExtension(videoFile.Name);
+            videoTaskName = Path.GetFileName(videoFile.Name);
         }
         StateHasChanged();
     }
@@ -956,12 +914,11 @@
         isCreatingVideoTask = true;
         try
         {
-            // 发送到后端API
-            var content = new MultipartFormDataContent();
-            content.Add(new StringContent($"{videoTaskName} - {videoProcessingType}处理"), "Description");
+                        // 发送到后端API
+        var content = new MultipartFormDataContent();
+            content.Add(new StringContent($"{videoTaskName}"), "Description");
             content.Add(new StringContent(Guid.NewGuid().ToString()), "Id");
             content.Add(new StringContent(DateTime.Now.ToString("o")), "CreationTime");
-            content.Add(new StringContent(videoProcessingType), "ProcessingType");
             content.Add(new StringContent(videoTaskDescription), "Notes");
             
             var stream = videoFile.OpenReadStream(maxAllowedSize: 1024 * 1024 * 500);
@@ -1248,13 +1205,14 @@
     // 批量下载图片方法
     private async Task DownloadAllImages()
     {
-        if (selectedSubTask?.ImagePaths?.Any() != true)
+        var imageUrls = selectedSubTask?.GetAllImageUrls();
+        if (imageUrls?.Any() != true)
             return;
 
         try
         {
             // 为每个图片创建下载链接并触发下载
-            foreach (var imagePath in selectedSubTask.ImagePaths)
+            foreach (var imagePath in imageUrls)
             {
                 await JSRuntime.InvokeVoidAsync("eval", $@"
                     var link = document.createElement('a');
@@ -1269,7 +1227,7 @@
                 await Task.Delay(200);
             }
             
-            await JSRuntime.InvokeVoidAsync("alert", $"开始下载 {selectedSubTask.ImagePaths.Count} 张图片");
+            await JSRuntime.InvokeVoidAsync("alert", $"开始下载 {imageUrls.Count} 张图片");
         }
         catch (Exception ex)
         {

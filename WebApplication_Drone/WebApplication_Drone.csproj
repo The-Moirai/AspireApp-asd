@@ -22,4 +22,8 @@
     <ProjectReference Include="..\ClassLibrary_Core\ClassLibrary_Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="wwwroot\TaskImages\" />
+  </ItemGroup>
+
 </Project>

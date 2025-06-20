@@ -956,5 +956,319 @@ namespace WebApplication_Drone.Services
 
             return dataPoints;
         }
+
+        #region 子任务图片管理
+
+        /// <summary>
+        /// 保存子任务图片到数据库
+        /// </summary>
+        /// <param name="subTaskId">子任务ID</param>
+        /// <param name="imageData">图片二进制数据</param>
+        /// <param name="fileName">文件名</param>
+        /// <param name="imageIndex">图片序号</param>
+        /// <param name="description">图片描述</param>
+        /// <returns>图片ID</returns>
+        public async Task<long> SaveSubTaskImageAsync(Guid subTaskId, byte[] imageData, string fileName, int imageIndex = 1, string? description = null)
+        {
+            var fileExtension = Path.GetExtension(fileName).ToLowerInvariant();
+            var contentType = GetContentType(fileExtension);
+
+            var sql = @"
+                INSERT INTO SubTaskImages (SubTaskId, ImageData, FileName, FileExtension, FileSize, ContentType, ImageIndex, Description)
+                VALUES (@SubTaskId, @ImageData, @FileName, @FileExtension, @FileSize, @ContentType, @ImageIndex, @Description);
+                SELECT CAST(SCOPE_IDENTITY() AS BIGINT);";
+
+            var parameters = new[]
+            {
+                new SqlParameter("@SubTaskId", subTaskId),
+                new SqlParameter("@ImageData", imageData),
+                new SqlParameter("@FileName", fileName),
+                new SqlParameter("@FileExtension", fileExtension),
+                new SqlParameter("@FileSize", imageData.Length),
+                new SqlParameter("@ContentType", contentType),
+                new SqlParameter("@ImageIndex", imageIndex),
+                new SqlParameter("@Description", description ?? (object)DBNull.Value)
+            };
+
+            try
+            {
+                using var connection = await CreateConnectionAsync();
+                using var command = new SqlCommand(sql, connection);
+                command.Parameters.AddRange(parameters);
+                var result = await command.ExecuteScalarAsync();
+                var imageId = Convert.ToInt64(result);
+                
+                _logger.LogInformation("图片保存到数据库成功: SubTaskId={SubTaskId}, ImageId={ImageId}, FileName={FileName}, Size={Size}字节", 
+                    subTaskId, imageId, fileName, imageData.Length);
+                
+                return imageId;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "保存子任务图片到数据库失败: SubTaskId={SubTaskId}, FileName={FileName}", subTaskId, fileName);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// 获取子任务的所有图片
+        /// </summary>
+        /// <param name="subTaskId">子任务ID</param>
+        /// <returns>图片列表</returns>
+        public async Task<List<SubTaskImage>> GetSubTaskImagesAsync(Guid subTaskId)
+        {
+            var images = new List<SubTaskImage>();
+            var sql = @"
+                SELECT Id, SubTaskId, FileName, FileExtension, FileSize, ContentType, ImageIndex, UploadTime, Description
+                FROM SubTaskImages
+                WHERE SubTaskId = @SubTaskId
+                ORDER BY ImageIndex, UploadTime";
+
+            try
+            {
+                using var connection = await CreateConnectionAsync();
+                using var command = new SqlCommand(sql, connection);
+                command.Parameters.AddWithValue("@SubTaskId", subTaskId);
+
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    images.Add(new SubTaskImage
+                    {
+                        Id = reader.GetInt64(reader.GetOrdinal("Id")),
+                        SubTaskId = reader.GetGuid(reader.GetOrdinal("SubTaskId")),
+                        FileName = reader.GetString(reader.GetOrdinal("FileName")),
+                        FileExtension = reader.GetString(reader.GetOrdinal("FileExtension")),
+                        FileSize = reader.GetInt64(reader.GetOrdinal("FileSize")),
+                        ContentType = reader.GetString(reader.GetOrdinal("ContentType")),
+                        ImageIndex = reader.GetInt32(reader.GetOrdinal("ImageIndex")),
+                        UploadTime = reader.GetDateTime(reader.GetOrdinal("UploadTime")),
+                        Description = reader.IsDBNull(reader.GetOrdinal("Description")) ? null : reader.GetString(reader.GetOrdinal("Description"))
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "获取子任务图片失败: SubTaskId={SubTaskId}", subTaskId);
+            }
+
+            return images;
+        }
+
+        /// <summary>
+        /// 根据图片ID获取图片数据
+        /// </summary>
+        /// <param name="imageId">图片ID</param>
+        /// <returns>图片数据</returns>
+        public async Task<SubTaskImage?> GetSubTaskImageAsync(long imageId)
+        {
+            var sql = @"
+                SELECT Id, SubTaskId, ImageData, FileName, FileExtension, FileSize, ContentType, ImageIndex, UploadTime, Description
+                FROM SubTaskImages
+                WHERE Id = @ImageId";
+
+            try
+            {
+                using var connection = await CreateConnectionAsync();
+                using var command = new SqlCommand(sql, connection);
+                command.Parameters.AddWithValue("@ImageId", imageId);
+
+                using var reader = await command.ExecuteReaderAsync();
+                if (await reader.ReadAsync())
+                {
+                    return new SubTaskImage
+                    {
+                        Id = reader.GetInt64(reader.GetOrdinal("Id")),
+                        SubTaskId = reader.GetGuid(reader.GetOrdinal("SubTaskId")),
+                        ImageData = (byte[])reader["ImageData"],
+                        FileName = reader.GetString(reader.GetOrdinal("FileName")),
+                        FileExtension = reader.GetString(reader.GetOrdinal("FileExtension")),
+                        FileSize = reader.GetInt64(reader.GetOrdinal("FileSize")),
+                        ContentType = reader.GetString(reader.GetOrdinal("ContentType")),
+                        ImageIndex = reader.GetInt32(reader.GetOrdinal("ImageIndex")),
+                        UploadTime = reader.GetDateTime(reader.GetOrdinal("UploadTime")),
+                        Description = reader.IsDBNull(reader.GetOrdinal("Description")) ? null : reader.GetString(reader.GetOrdinal("Description"))
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "获取图片数据失败: ImageId={ImageId}", imageId);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 删除子任务的所有图片
+        /// </summary>
+        /// <param name="subTaskId">子任务ID</param>
+        /// <returns>删除的图片数量</returns>
+        public async Task<int> DeleteSubTaskImagesAsync(Guid subTaskId)
+        {
+            var sql = "DELETE FROM SubTaskImages WHERE SubTaskId = @SubTaskId";
+            
+            try
+            {
+                var deletedCount = await ExecuteNonQueryAsync(sql, new SqlParameter("@SubTaskId", subTaskId));
+                _logger.LogInformation("删除子任务图片: SubTaskId={SubTaskId}, 删除数量={DeletedCount}", subTaskId, deletedCount);
+                return deletedCount;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "删除子任务图片失败: SubTaskId={SubTaskId}", subTaskId);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// 删除指定图片
+        /// </summary>
+        /// <param name="imageId">图片ID</param>
+        /// <returns>是否删除成功</returns>
+        public async Task<bool> DeleteSubTaskImageAsync(long imageId)
+        {
+            var sql = "DELETE FROM SubTaskImages WHERE Id = @ImageId";
+            
+            try
+            {
+                var result = await ExecuteNonQueryAsync(sql, new SqlParameter("@ImageId", imageId));
+                _logger.LogInformation("删除图片: ImageId={ImageId}, 结果={Result}", imageId, result > 0);
+                return result > 0;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "删除图片失败: ImageId={ImageId}", imageId);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 根据文件扩展名获取MIME类型
+        /// </summary>
+        /// <param name="fileExtension">文件扩展名</param>
+        /// <returns>MIME类型</returns>
+        private static string GetContentType(string fileExtension)
+        {
+            return fileExtension.ToLowerInvariant() switch
+            {
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".gif" => "image/gif",
+                ".bmp" => "image/bmp",
+                ".webp" => "image/webp",
+                ".svg" => "image/svg+xml",
+                _ => "image/png" // 默认为PNG
+            };
+        }
+
+        #endregion
+
+        /// <summary>
+        /// 从数据库获取单个主任务
+        /// </summary>
+        /// <param name="taskId">任务ID</param>
+        /// <returns>主任务对象，如果不存在则返回null</returns>
+        public async Task<MainTask?> GetMainTaskAsync(Guid taskId)
+        {
+            try
+            {
+                var sql = @"
+                    SELECT Id, Description, Status, CreationTime, CompletedTime
+                    FROM MainTasks 
+                    WHERE Id = @TaskId";
+
+                using var connection = await CreateConnectionAsync();
+                using var command = new SqlCommand(sql, connection);
+                command.Parameters.AddWithValue("@TaskId", taskId);
+
+                using var reader = await command.ExecuteReaderAsync();
+                if (await reader.ReadAsync())
+                {
+                    var mainTask = new MainTask
+                    {
+                        Id = reader.GetGuid(reader.GetOrdinal("Id")),
+                        Description = reader.GetString(reader.GetOrdinal("Description")),
+                        Status = (System.Threading.Tasks.TaskStatus)reader.GetInt32(reader.GetOrdinal("Status")),
+                        CreationTime = reader.GetDateTime(reader.GetOrdinal("CreationTime")),
+                        CompletedTime = reader.IsDBNull(reader.GetOrdinal("CompletedTime")) ? null : reader.GetDateTime(reader.GetOrdinal("CompletedTime"))
+                    };
+
+                    // 关闭当前reader
+                    reader.Close();
+
+                    // 加载子任务
+                    var subTasks = await GetSubTasksByParentAsync(taskId);
+                    mainTask.SubTasks.AddRange(subTasks);
+
+                    _logger.LogDebug("从数据库获取主任务成功: TaskId={TaskId}, SubTaskCount={SubTaskCount}", 
+                        taskId, subTasks.Count);
+
+                    return mainTask;
+                }
+
+                _logger.LogDebug("未找到主任务: TaskId={TaskId}", taskId);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "从数据库获取主任务失败: TaskId={TaskId}", taskId);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 从数据库获取子任务信息（根据子任务名称）
+        /// </summary>
+        /// <param name="taskId">主任务ID</param>
+        /// <param name="subTaskDescription">子任务描述</param>
+        /// <returns>子任务对象，如果不存在则返回null</returns>
+        public async Task<SubTask?> GetSubTaskByDescriptionAsync(Guid taskId, string subTaskDescription)
+        {
+            try
+            {
+                var sql = @"
+                    SELECT Id, Description, Status, CreationTime, AssignedTime, CompletedTime, ParentTask, ReassignmentCount, AssignedDrone
+                    FROM SubTasks 
+                    WHERE ParentTask = @TaskId AND Description = @Description";
+
+                using var connection = await CreateConnectionAsync();
+                using var command = new SqlCommand(sql, connection);
+                command.Parameters.AddWithValue("@TaskId", taskId);
+                command.Parameters.AddWithValue("@Description", subTaskDescription);
+
+                using var reader = await command.ExecuteReaderAsync();
+                if (await reader.ReadAsync())
+                {
+                    var subTask = new SubTask
+                    {
+                        Id = reader.GetGuid(reader.GetOrdinal("Id")),
+                        Description = reader.GetString(reader.GetOrdinal("Description")),
+                        Status = (TaskStatus)Convert.ToInt32(reader.GetOrdinal("Status")),
+                        CreationTime = reader.GetDateTime(reader.GetOrdinal("CreationTime")),
+                        AssignedTime = reader.IsDBNull(reader.GetOrdinal("AssignedTime")) ? null : reader.GetDateTime(reader.GetOrdinal("AssignedTime")),
+                        CompletedTime = reader.IsDBNull(reader.GetOrdinal("CompletedTime")) ? null : reader.GetDateTime(reader.GetOrdinal("CompletedTime")),
+                        ParentTask = reader.GetGuid(reader.GetOrdinal("ParentTask")),
+                        ReassignmentCount = reader.GetInt32(reader.GetOrdinal("ReassignmentCount")),
+                        AssignedDrone = reader.IsDBNull(reader.GetOrdinal("AssignedDrone")) ? string.Empty : reader.GetString(reader.GetOrdinal("AssignedDrone"))
+                    };
+
+                    _logger.LogDebug("从数据库获取子任务成功: SubTaskId={SubTaskId}, Description={Description}", 
+                        subTask.Id, subTaskDescription);
+
+                    return subTask;
+                }
+
+                _logger.LogDebug("未找到子任务: TaskId={TaskId}, Description={Description}", taskId, subTaskDescription);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "从数据库获取子任务失败: TaskId={TaskId}, Description={Description}", taskId, subTaskDescription);
+                return null;
+            }
+        }
+
+
     }
 }

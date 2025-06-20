@@ -429,10 +429,16 @@ namespace WebApplication_Drone.Services
                         string mainTaskName = string.Join("_", parts.Take(parts.Length - 2));
                         
                         // 通过描述查找主任务
-                        var mainTask = _taskDataService.GetTasks().FirstOrDefault(t => t.Id == Guid.Parse(mainTaskName));
+                        if (!Guid.TryParse(mainTaskName, out var mainTaskGuid))
+                        {
+                            _logger.LogWarning("主任务名称不是有效的GUID格式: {MainTaskName}", mainTaskName);
+                            continue;
+                        }
+                        
+                        var mainTask = _taskDataService.GetTasks().FirstOrDefault(t => t.Id == mainTaskGuid);
                         if (mainTask == null)
                         {
-                            _logger.LogWarning("MainTask Not Found 未找到主任务: {MainTaskName}", mainTaskName);
+                            _logger.LogWarning("MainTask Not Found 未找到主任务: {MainTaskName} (GUID: {MainTaskGuid})", mainTaskName, mainTaskGuid);
                             continue;
                         }
 
@@ -489,10 +495,16 @@ namespace WebApplication_Drone.Services
                     string mainTaskName = string.Join("_", groupParts.Take(groupParts.Length - 1));
 
                     // 查找已存在的主任务
-                    var mainTask = _taskDataService.GetTask(Guid.Parse(mainTaskName));
+                    if (!Guid.TryParse(mainTaskName, out var mainTaskGuid))
+                    {
+                        _logger.LogError("主任务名称不是有效的GUID格式: {MainTaskName}，无法添加子任务", mainTaskName);
+                        continue;
+                    }
+                    
+                    var mainTask = _taskDataService.GetTask(mainTaskGuid);
                     if (mainTask == null)
                     {
-                        _logger.LogError("Not Found MainTask ,the name is: {MainTaskName}，So the subTask is not add。", mainTaskName);
+                        _logger.LogError("Not Found MainTask ,the name is: {MainTaskName} (GUID: {MainTaskGuid})，So the subTask is not add。", mainTaskName, mainTaskGuid);
                         continue;
                     }
 
@@ -582,7 +594,7 @@ namespace WebApplication_Drone.Services
             {
                 drones.Add(new Drone
                 {
-                    Id = new Guid(),
+                    Id = Guid.NewGuid(), // 使用Guid.NewGuid()生成新的唯一标识符
                     Name = nodesName[i].ToString(),
                     Status = DroneStatus.Idle, // 默认状态
                     CurrentPosition = new GPSPosition(x[i], y[i]),
@@ -649,7 +661,6 @@ namespace WebApplication_Drone.Services
         {
             if (e.Action == "Delete")
             {
-             
                 // 删除任务的处理逻辑
                 _logger.LogInformation($"Task {e.MainTask.Description} was Delete。");
             }

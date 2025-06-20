@@ -33,7 +33,7 @@ def load_config():
             'alg_ip': '192.168.31.35',
             'ui_port': '5009',
             'mission_socket_ip': '192.168.31.93',
-            'mission_socket_port': '8080'
+            'mission_socket_port': '5009'
         }
         
         with open(config_file, 'w') as f:
@@ -52,6 +52,9 @@ UI_port = config.getint('DEFAULT', 'ui_port')
 # 图片传输相关配置
 MISSION_SOCKET_IP = config.get('DEFAULT', 'mission_socket_ip')
 MISSION_SOCKET_PORT = config.getint('DEFAULT', 'mission_socket_port')
+
+print(f"图片传输服务配置: {MISSION_SOCKET_IP}:{MISSION_SOCKET_PORT}")
+print("图片传输协议: 使用带头消息的单张图片传输方式")
 
 ans_set:Dict={}#存储每个任务的结果
 
@@ -84,12 +87,16 @@ def send_images_to_mission_service(task_id: str, subtask_id: str, image_paths: L
             header_json = json.dumps(message_header)
             sock.sendall(header_json.encode('utf-8'))
             
+            # 发送分隔符（用于标识JSON结束）
+            sock.sendall(b'\n')
+            
             # 发送每张图片
             success_count = 0
             for i, image_path in enumerate(image_paths):
                 if os.path.exists(image_path):
                     try:
-                        send_single_image(sock, image_path)
+                        # 使用带头消息的方式发送图片
+                        send_single_image_with_header(sock, image_path, task_id, subtask_id, i + 1, len(image_paths))
                         success_count += 1
                         print(f"已发送图片 {i+1}/{len(image_paths)}: {image_path}")
                     except Exception as e:
@@ -119,9 +126,51 @@ def send_images_to_mission_service(task_id: str, subtask_id: str, image_paths: L
     print(f"发送图片失败，已重试 {max_retries} 次")
     return False
 
+def send_single_image_with_header(sock: socket.socket, image_path: str, task_id: str, subtask_id: str, image_index: int, total_images: int):
+    """
+    发送带头消息的单张图片文件
+    :param sock: TCP socket连接
+    :param image_path: 图片文件路径
+    :param task_id: 任务ID
+    :param subtask_id: 子任务ID
+    :param image_index: 图片序号（从1开始）
+    :param total_images: 图片总数
+    """
+    try:
+        # 发送图片头消息
+        image_header = {
+            "type": "single_image",
+            "content": {
+                "task_id": task_id,
+                "subtask_name": subtask_id,
+                "image_index": image_index,
+                "total_images": total_images,
+                "filename": os.path.basename(image_path),
+                "filesize": os.path.getsize(image_path)
+            }
+        }
+        
+        # 发送JSON头消息
+        header_json = json.dumps(image_header)
+        sock.sendall(header_json.encode('utf-8'))
+        
+        # 发送分隔符（用于标识JSON结束）
+        sock.sendall(b'\n')
+        
+        # 直接发送图片文件内容（不包含Python的文件名长度等信息）
+        with open(image_path, 'rb') as f:
+            while True:
+                chunk = f.read(4096)
+                if not chunk:
+                    break
+                sock.sendall(chunk)
+        
+    except Exception as e:
+        print(f"发送带头消息的单张图片失败: {e}")
+
 def send_single_image(sock: socket.socket, image_path: str):
     """
-    发送单张图片文件
+    发送单张图片文件（保留原有接口兼容性）
     :param sock: TCP socket连接
     :param image_path: 图片文件路径
     """
@@ -151,35 +200,63 @@ def send_single_image(sock: socket.socket, image_path: str):
     except Exception as e:
         print(f"发送单张图片失败: {e}")
 
-def send_task_completion_info(task_id: str, subtask_id: str, result: str):
+def send_task_completion_info(task_id: str, subtask_id: str, result: str, max_retries: int = 3):
     """
     向 MissionSocketService 发送任务完成信息
     :param task_id: 任务ID
     :param subtask_id: 子任务ID
     :param result: 处理结果描述
+    :param max_retries: 最大重试次数
+    """
+    for attempt in range(max_retries):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10)  # 设置10秒超时
+            sock.connect((MISSION_SOCKET_IP, MISSION_SOCKET_PORT))
+            
+            # 发送任务结果消息
+            message = {
+                "type": "task_result",
+                "content": {
+                    "task_id": task_id,
+                    "subtask_name": subtask_id,
+                    "result": result
+                }
+            }
+            
+            message_json = json.dumps(message)
+            sock.sendall(message_json.encode('utf-8'))
+            
+            print(f"已发送任务完成信息: {subtask_id} - {result}")
+            sock.close()
+            return True
+            
+        except Exception as e:
+            print(f"发送任务完成信息失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1)  # 等待1秒后重试
+        finally:
+            try:
+                sock.close()
+            except:
+                pass
+    
+    print(f"发送任务完成信息失败，已重试 {max_retries} 次")
+    return False
+
+def send_task_info_to_ui(task_info_client, task_info):
+    """
+    向UI发送任务信息
+    :param task_info_client: UI客户端连接
+    :param task_info: 任务信息字典
     """
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect((MISSION_SOCKET_IP, MISSION_SOCKET_PORT))
-        
-        # 发送任务结果消息
-        message = {
-            "type": "task_result",
-            "content": {
-                "task_id": task_id,
-                "subtask_name": subtask_id,
-                "result": result
-            }
-        }
-        
-        message_json = json.dumps(message)
-        sock.sendall(message_json.encode('utf-8'))
-        
-        print(f"已发送任务完成信息: {subtask_id} - {result}")
-        sock.close()
-        
+        if task_info_client is not None:
+            task_info_client.sendall(json.dumps(task_info).encode(encoding="utf-8"))
+            return True
     except Exception as e:
-        print(f"发送任务完成信息失败: {e}")
+        print(f"发送任务信息到UI失败: {e}")
+    return False
 
 def create_folder_and_save_images_with_transmission(images, folder_name, task_id: str, subtask_id: str):
     """
@@ -201,17 +278,29 @@ def create_folder_and_save_images_with_transmission(images, folder_name, task_id
             continue
             
         filename = os.path.join(folder_name, f"{frame_index:04d}.png")
-        cv2.imwrite(filename, image)
-        image_paths.append(filename)
+        success = cv2.imwrite(filename, image)
+        if success:
+            image_paths.append(filename)
+        else:
+            print(f"警告：保存图片失败 {filename}")
 
     print(f"所有图片已保存至 {folder_name} 文件夹，共 {len(image_paths)} 张")
     
     # 传输图片到MissionSocketService
     if image_paths:
-        send_images_to_mission_service(task_id, subtask_id, image_paths)
+        print(f"开始传输 {len(image_paths)} 张图片到 MissionSocketService...")
+        transmission_success = send_images_to_mission_service(task_id, subtask_id, image_paths)
         
         # 发送处理结果信息
-        result_info = f"处理完成，生成{len(image_paths)}张图片"
+        if transmission_success:
+            result_info = f"处理完成，生成并成功传输{len(image_paths)}张图片"
+            send_task_completion_info(task_id, subtask_id, result_info)
+        else:
+            result_info = f"处理完成，生成{len(image_paths)}张图片，但传输失败"
+            send_task_completion_info(task_id, subtask_id, result_info)
+    else:
+        print("没有有效的图片需要传输")
+        result_info = "处理完成，但没有生成有效图片"
         send_task_completion_info(task_id, subtask_id, result_info)
 
 def create_folder_and_save_images(images, folder_name):
@@ -466,8 +555,7 @@ class NodeWorker(threading.Thread):
                                     },
                                     "next_node": ""
                                 }
-                    if(task_info_client!=None):
-                        task_info_client.sendall(json.dumps(error_info).encode(encoding="utf-8"))
+                    send_task_info_to_ui(task_info_client, error_info)
                                 
                 except Exception as e:
                     with self.lock:
@@ -497,12 +585,16 @@ class NodeWorker(threading.Thread):
                 ans_set[self.task_name].append(subtask.ans)
                 
                 # 保存图片并传输到MissionSocketService
-                create_folder_and_save_images_with_transmission(
-                    subtask.ans, 
-                    self.task_name, 
-                    self.task_name, 
-                    subtask.subtask_id
-                )
+                try:
+                    create_folder_and_save_images_with_transmission(
+                        subtask.ans, 
+                        self.task_name, 
+                        self.task_name, 
+                        subtask.subtask_id
+                    )
+                    print(f"[{subtask.subtask_id}] 图片保存和传输完成")
+                except Exception as e:
+                    print(f"[{subtask.subtask_id}] 图片保存和传输失败: {e}")
                 
                 if(len(ans_set[self.task_name])==100):
                     abs_path=os.getcwd()
@@ -519,13 +611,18 @@ class NodeWorker(threading.Thread):
                                 }
                     print(task_info)
                     
-                    # 发送任务完成信息到MissionSocketService
+                    # 发送主任务完成信息到MissionSocketService
                     try:
-                        send_task_completion_info(
+                        main_task_result = f"主任务完成，共处理{len(ans_set[self.task_name])}个子任务"
+                        success = send_task_completion_info(
                             self.task_name, 
-                            subtask.subtask_id, 
-                            f"主任务完成，共处理{len(ans_set[self.task_name])}个子任务"
+                            "main_task_complete", 
+                            main_task_result
                         )
+                        if success:
+                            print(f"[{self.task_name}] 主任务完成信息发送成功")
+                        else:
+                            print(f"[{self.task_name}] 主任务完成信息发送失败")
                     except Exception as e:
                         print(f"发送主任务完成信息失败: {e}")
                 else:
@@ -542,8 +639,7 @@ class NodeWorker(threading.Thread):
                                 }
                 
                 ####此处需要向前端发送任务处理的情况
-                if(task_info_client!=None):
-                    task_info_client.sendall(json.dumps(task_info).encode(encoding="utf-8"))
+                send_task_info_to_ui(task_info_client, task_info)
             except Exception as e:
                 print(f"[ERR] {subtask.subtask_id} 发送失败: {e}")
                 # 若要重试，可将 subtask 重新放回队列
