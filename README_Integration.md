@@ -22,13 +22,13 @@ graph TB
 AspireApp-asd/
 ├── BlazorApp_Web/
 │   ├── Components/Pages/
-│   │   ├── VideoProcessing.razor          # 主要视频处理页面
-│   │   └── PythonBackend.razor           # Python后端状态页面
+│   │   ├── Task_Manage.razor              # 智能任务管理系统（整合视频处理功能）
+
 │   ├── Controllers/
 │   │   ├── VideoAPIController.cs         # 视频API控制器
 │   │   └── ImageProcessingController.cs  # 图像处理控制器
 │   ├── Service/
-│   │   └── PythonBackendService.cs       # Python后端通信服务
+
 │   └── appsettings.json                  # 配置文件
 ├── linux_code/
 │   ├── real_work.py                      # Python后端主文件
@@ -53,18 +53,7 @@ UI_port = 5009                  # UI端口
 
 ### 2. .NET 前端配置
 
-在 `BlazorApp_Web/appsettings.json` 中配置Python后端连接：
-
-```json
-{
-  "PythonBackend": {
-    "BaseUrl": "http://localhost:5000",
-    "Host": "192.168.31.35",
-    "Port": 5007,
-    "UseMockData": false
-  }
-}
-```
+Python后端连接配置已直接集成到 VideoAPIController 中，默认连接到 `192.168.31.35:5007`。
 
 ## 🚀 启动步骤
 
@@ -86,9 +75,9 @@ dotnet run
 
 Web应用将在 `https://localhost:5001` 或 `http://localhost:5000` 启动。
 
-### 3. 访问视频处理页面
+### 3. 访问智能任务管理系统
 
-打开浏览器访问：`https://localhost:5001/video-processing`
+打开浏览器访问：`https://localhost:5001/task_manage` 或 `https://localhost:5001/video-processing`
 
 ## 📋 功能特性
 

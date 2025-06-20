@@ -44,5 +44,17 @@ namespace ClassLibrary_Core.Mission
         /// 子任务分配的无人机
         /// </summary>
         public string AssignedDrone { get; set; }
+        /// <summary>
+        /// 子任务处理结果图片路径列表
+        /// </summary>
+        public List<string> ImagePaths { get; set; } = new List<string>();
+        /// <summary>
+        /// 子任务处理结果信息
+        /// </summary>
+        public string? Result { get; set; }
+        /// <summary>
+        /// 子任务的处理类型（人脸识别、物体检测等）
+        /// </summary>
+        public string? ProcessingType { get; set; }
     }
 }

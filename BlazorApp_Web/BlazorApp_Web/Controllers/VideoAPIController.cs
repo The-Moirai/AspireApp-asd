@@ -21,8 +21,8 @@ namespace BlazorApp_Web.Controllers
             _logger = logger;
             _configuration = configuration;
             _outputPath = Path.Combine("wwwroot", "processed");
-            _pythonHost = _configuration.GetValue<string>("PythonBackend:Host") ?? "192.168.31.35";
-            _pythonPort = _configuration.GetValue<int>("PythonBackend:Port", 5007);
+            _pythonHost = "192.168.31.35"; // 默认 Python 后端主机
+            _pythonPort = 5007; // 默认 Python 后端端口
             
             // 确保输出目录存在
             if (!Directory.Exists(_outputPath))

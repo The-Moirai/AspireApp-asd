@@ -304,48 +304,43 @@ namespace WebApplication_Drone.Services
             }
         }
         /// <summary>
-        /// 完成指定子任务
+        /// 完成指定的子任务
         /// </summary>
+        /// <param name="mainTaskId">大任务的唯一标识符</param>
+        /// <param name="subTaskDescription">子任务的描述信息</param>
+        /// <returns>返回完成成功与否</returns>
         public bool CompleteSubTask(Guid mainTaskId, string subTaskDescription)
         {
             lock (_lock)
             {
-                var mainTask = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
-                if (mainTask == null) return false;
-                var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Description == subTaskDescription);
-                if (subTask == null) return false;
-
-                subTask.Status = TaskStatus.RanToCompletion;
-                subTask.CompletedTime = DateTime.UtcNow;
-
-                // 检查主任务是否也完成了
-                if (mainTask.SubTasks.All(st => st.Status == TaskStatus.RanToCompletion))
+                var task = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
+                if (task != null)
                 {
-                    mainTask.Status = TaskStatus.RanToCompletion;
-                    mainTask.CompletedTime = DateTime.UtcNow;
-                }
-
-                // 异步同步到数据库 - 创建快照避免集合修改异常
-                var subTaskSnapshot = CloneSubTask(subTask);
-                var mainTaskSnapshot = CloneTask(mainTask);
-                var shouldUpdateMainTask = mainTask.Status == TaskStatus.RanToCompletion;
-                _ = Task.Run(async () =>
-                {
-                    try
+                    var subTask = task.SubTasks.FirstOrDefault(st => st.Description == subTaskDescription);
+                    if (subTask != null && subTask.Status != System.Threading.Tasks.TaskStatus.RanToCompletion)
                     {
-                        await _sqlserverService.UpdateSubTaskAsync(subTaskSnapshot);
-                        if (shouldUpdateMainTask)
+                        subTask.Status = System.Threading.Tasks.TaskStatus.RanToCompletion;
+                        subTask.CompletedTime = DateTime.Now;
+                        OnDroneChanged("SubTaskCompleted", task);
+
+                        // 异步同步到数据库
+                        var taskSnapshot = CloneTask(task);
+                        _ = Task.Run(async () =>
                         {
-                            await _sqlserverService.UpdateMainTaskAsync(mainTaskSnapshot);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "完成子任务数据库同步错误: {Message}", ex.Message);
-                    }
-                });
+                            try
+                            {
+                                await _sqlserverService.FullSyncMainTaskAsync(taskSnapshot);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "完成子任务数据库同步错误: {Message}", ex.Message);
+                            }
+                        });
 
-                return true;
+                        return true;
+                    }
+                }
+                return false;
             }
         }
         /// <summary>
@@ -540,7 +535,10 @@ namespace WebApplication_Drone.Services
             CompletedTime = st.CompletedTime,
             ParentTask = st.ParentTask,
             ReassignmentCount = st.ReassignmentCount,
-            AssignedDrone = st.AssignedDrone
+            AssignedDrone = st.AssignedDrone,
+            ImagePaths = st.ImagePaths.ToList(),
+            Result = st.Result,
+            ProcessingType = st.ProcessingType
         };
 
         /// <summary>
@@ -813,6 +811,146 @@ namespace WebApplication_Drone.Services
                 }
                 
                 return analysis;
+            }
+        }
+
+        /// <summary>
+        /// 更新子任务的图片路径
+        /// </summary>
+        /// <param name="mainTaskId">大任务的唯一标识符</param>
+        /// <param name="subTaskDescription">子任务的描述信息</param>
+        /// <param name="imagePath">图片路径</param>
+        /// <returns>返回更新成功与否</returns>
+        public bool UpdateSubTaskImage(Guid mainTaskId, string subTaskDescription, string imagePath)
+        {
+            lock (_lock)
+            {
+                var task = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
+                if (task != null)
+                {
+                    var subTask = task.SubTasks.FirstOrDefault(st => st.Description == subTaskDescription);
+                    if (subTask != null)
+                    {
+                        // 添加新图片路径到列表中
+                        if (!subTask.ImagePaths.Contains(imagePath))
+                        {
+                            subTask.ImagePaths.Add(imagePath);
+                        }
+                        OnDroneChanged("SubTaskImageUpdated", task);
+
+                        // 异步同步到数据库
+                        var taskSnapshot = CloneTask(task);
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await _sqlserverService.FullSyncMainTaskAsync(taskSnapshot);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "更新子任务图片数据库同步错误: {Message}", ex.Message);
+                            }
+                        });
+
+                        _logger.LogInformation("子任务图片更新成功: TaskId={TaskId}, SubTask={SubTask}, ImagePath={ImagePath}, 总图片数={ImageCount}", 
+                            mainTaskId, subTaskDescription, imagePath, subTask.ImagePaths.Count);
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 批量添加子任务图片
+        /// </summary>
+        /// <param name="mainTaskId">大任务的唯一标识符</param>
+        /// <param name="subTaskDescription">子任务的描述信息</param>
+        /// <param name="imagePaths">图片路径列表</param>
+        /// <returns>返回更新成功与否</returns>
+        public bool AddSubTaskImages(Guid mainTaskId, string subTaskDescription, List<string> imagePaths)
+        {
+            lock (_lock)
+            {
+                var task = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
+                if (task != null)
+                {
+                    var subTask = task.SubTasks.FirstOrDefault(st => st.Description == subTaskDescription);
+                    if (subTask != null)
+                    {
+                        // 批量添加图片路径，避免重复
+                        foreach (var imagePath in imagePaths)
+                        {
+                            if (!subTask.ImagePaths.Contains(imagePath))
+                            {
+                                subTask.ImagePaths.Add(imagePath);
+                            }
+                        }
+                        OnDroneChanged("SubTaskImagesUpdated", task);
+
+                        // 异步同步到数据库
+                        var taskSnapshot = CloneTask(task);
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await _sqlserverService.FullSyncMainTaskAsync(taskSnapshot);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "批量更新子任务图片数据库同步错误: {Message}", ex.Message);
+                            }
+                        });
+
+                        _logger.LogInformation("子任务图片批量更新成功: TaskId={TaskId}, SubTask={SubTask}, 新增图片数={NewImageCount}, 总图片数={TotalImageCount}", 
+                            mainTaskId, subTaskDescription, imagePaths.Count, subTask.ImagePaths.Count);
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 更新子任务的处理结果
+        /// </summary>
+        /// <param name="mainTaskId">大任务的唯一标识符</param>
+        /// <param name="subTaskDescription">子任务的描述信息</param>
+        /// <param name="result">处理结果</param>
+        /// <returns>返回更新成功与否</returns>
+        public bool UpdateSubTaskResult(Guid mainTaskId, string subTaskDescription, string result)
+        {
+            lock (_lock)
+            {
+                var task = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
+                if (task != null)
+                {
+                    var subTask = task.SubTasks.FirstOrDefault(st => st.Description == subTaskDescription);
+                    if (subTask != null)
+                    {
+                        subTask.Result = result;
+                        OnDroneChanged("SubTaskResultUpdated", task);
+
+                        // 异步同步到数据库
+                        var taskSnapshot = CloneTask(task);
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await _sqlserverService.FullSyncMainTaskAsync(taskSnapshot);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "更新子任务结果数据库同步错误: {Message}", ex.Message);
+                            }
+                        });
+
+                        _logger.LogInformation("子任务结果更新成功: TaskId={TaskId}, SubTask={SubTask}, Result={Result}", 
+                            mainTaskId, subTaskDescription, result);
+                        return true;
+                    }
+                }
+                return false;
             }
         }
     }

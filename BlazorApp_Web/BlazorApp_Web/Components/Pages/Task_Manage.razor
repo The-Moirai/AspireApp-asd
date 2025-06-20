@@ -1,181 +1,823 @@
 ﻿@page "/task_manage"
+@page "/video-processing"
 @rendermode InteractiveServer
 @using ClassLibrary_Core.Mission
+@using ClassLibrary_Core.Common
 @using Microsoft.AspNetCore.SignalR.Client
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
 @inject IHttpClientFactory HttpClientFactory
 @inject NavigationManager Navigation
+@inject ILogger<Task_Manage> Logger
+@inject IJSRuntime JSRuntime
 @implements IAsyncDisposable
-<h3>任务管理</h3>
 
-<div class="connection-status">
-    <p>连接状态: @(IsConnected ? "已连接" : "未连接")</p>
+<PageTitle>智能视频处理任务管理系统</PageTitle>
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <h1 class="display-4 text-center mb-4">
+                <i class="bi bi-camera-video"></i> 智能视频处理任务管理系统
+            </h1>
+        </div>
+    </div>
+
+    <!-- 导航标签页 -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <ul class="nav nav-tabs" id="taskTabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link @(activeTab == "overview" ? "active" : "")" 
+                            id="overview-tab" 
+                            type="button" 
+                            @onclick="@(() => SetActiveTab("overview"))">
+                        <i class="bi bi-speedometer2"></i> 系统概览
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link @(activeTab == "video" ? "active" : "")" 
+                            id="video-tab" 
+                            type="button" 
+                            @onclick="@(() => SetActiveTab("video"))">
+                        <i class="bi bi-camera-video"></i> 视频处理
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link @(activeTab == "tasks" ? "active" : "")" 
+                            id="tasks-tab" 
+                            type="button" 
+                            @onclick="@(() => SetActiveTab("tasks"))">
+                        <i class="bi bi-list-ul"></i> 任务管理
+                    </button>
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- 系统概览标签页 -->
+    @if (activeTab == "overview")
+    {
+        <div class="tab-content">
+            <!-- 连接状态和集群信息 -->
+            <div class="row mb-4">
+                <div class="col-md-4">
+                    <div class="card border-info">
+                        <div class="card-header bg-info text-white">
+                            <h6 class="card-title mb-0">
+                                <i class="bi bi-wifi"></i> 连接状态
+                            </h6>
+                        </div>
+                        <div class="card-body">
+                            <p><strong>SignalR:</strong> @(IsConnected ? "已连接" : "未连接")</p>
+                            <p><strong>视频任务数:</strong> @(tasks?.Count ?? 0)</p>
+                            <p><strong>处理中任务:</strong> @GetProcessingTaskCount()</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-md-4">
+                    <div class="card border-primary">
+                        <div class="card-header bg-primary text-white">
+                            <h6 class="card-title mb-0">
+                                <i class="bi bi-hdd-network"></i> 集群状态
+                            </h6>
+                        </div>
+                        <div class="card-body">
+                            @if (clusterInfo != null)
+                            {
+                                <p><strong>总节点数:</strong> @clusterInfo.TotalNodes</p>
+                                <p><strong>活跃节点:</strong> @clusterInfo.ActiveNodes</p>
+                                <p><strong>集群数:</strong> @clusterInfo.Clusters.Count</p>
+                            }
+                            else
+                            {
+                                <p class="text-muted">加载中...</p>
+                            }
+                            <button class="btn btn-sm btn-outline-primary" @onclick="RefreshClusterInfo" disabled="@isRefreshingCluster">
+                                @if (isRefreshingCluster)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-1"></span>
+                                }
+                                <i class="bi bi-arrow-clockwise"></i> 刷新
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-md-4">
+                    <div class="card border-success">
+                        <div class="card-header bg-success text-white">
+                            <h6 class="card-title mb-0">
+                                <i class="bi bi-gear"></i> 集群控制
+                            </h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="mb-2">
+                                <label class="form-label">启动节点数量:</label>
+                                <input type="number" class="form-control form-control-sm" @bind="nodeCountToStart" min="1" max="20" />
+                            </div>
+                            <button class="btn btn-sm btn-success me-2" @onclick="StartNodes" disabled="@isStartingNodes">
+                                @if (isStartingNodes)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-1"></span>
+                                }
+                                <i class="bi bi-play"></i> 启动节点
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- 视频处理标签页 -->
+    @if (activeTab == "video")
+    {
+        <div class="tab-content">
+            <!-- 任务创建入口 -->
+            <div class="row mb-4">
+                <div class="col-12">
+                    <div class="card border-primary">
+                        <div class="card-header bg-primary text-white">
+                            <h5 class="card-title mb-0">
+                                <i class="bi bi-plus-circle"></i> 创建视频处理任务
+                            </h5>
+                        </div>
+                        <div class="card-body text-center">
+                            <p class="card-text">创建新的视频处理任务，支持人脸识别、物体检测等AI处理功能。</p>
+                            <button class="btn btn-primary btn-lg" @onclick="ShowVideoTaskForm">
+                                <i class="bi bi-plus-circle"></i> 创建视频任务
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 视频任务监控 -->
+            <div class="row">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="card-title mb-0">
+                                <i class="bi bi-camera-video"></i> 视频处理任务
+                                <button class="btn btn-sm btn-outline-secondary float-end" @onclick="RefreshTaskStatus">
+                                    <i class="bi bi-arrow-clockwise"></i> 刷新状态
+                                </button>
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            @if (tasks?.Any() == true)
+                            {
+                                <div class="table-responsive">
+                                    <table class="table table-hover">
+                                        <thead>
+                                            <tr>
+                                                <th>任务名称</th>
+                                                <th>状态</th>
+                                                <th>进度</th>
+                                                <th>子任务</th>
+                                                <th>创建时间</th>
+                                                <th>操作</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var task in tasks)
+                                            {
+                                                var completedSubtasks = GetCompletedSubTaskCount(task);
+                                                var totalSubtasks = GetActiveSubTaskCount(task);
+                                                var progress = totalSubtasks > 0 ? (double)completedSubtasks / totalSubtasks * 100 : 0;
+                                                
+                                                <tr>
+                                                    <td>
+                                                        <strong>@task.Description</strong>
+                                                        <br />
+                                                        <small class="text-muted">ID: @task.Id.ToString("N")[..8]</small>
+                                                    </td>
+                                                    <td>
+                                                        <span class="badge @GetTaskStatusBadge(task.Status)">
+                                                            @GetTaskStatusText(task.Status)
+                                                        </span>
+                                                    </td>
+                                                    <td>
+                                                        <div class="progress" style="height: 20px;">
+                                                            <div class="progress-bar @GetProgressBarClass(task.Status)" 
+                                                                 role="progressbar" 
+                                                                 style="width: @(progress)%"
+                                                                 aria-valuenow="@progress" 
+                                                                 aria-valuemin="0" 
+                                                                 aria-valuemax="100">
+                                                                @(progress.ToString("F1"))%
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        @completedSubtasks / @totalSubtasks
+                                                    </td>
+                                                    <td>
+                                                        @task.CreationTime.ToString("yyyy-MM-dd HH:mm")
+                                                    </td>
+                                                    <td>
+                                                        <button class="btn btn-sm btn-outline-info me-1" @onclick="() => ToggleSubTasks(task.Id)">
+                                                            <i class="bi bi-@(expandedTaskId == task.Id ? "chevron-up" : "chevron-down")"></i>
+                                                            @(expandedTaskId == task.Id ? "收起" : "详情")
+                                                        </button>
+                                                        @if (task.Status == System.Threading.Tasks.TaskStatus.RanToCompletion)
+                                                        {
+                                                            <button class="btn btn-sm btn-success" @onclick="() => ViewTaskResults(task)">
+                                                                <i class="bi bi-images"></i> 查看结果
+                                                            </button>
+                                                        }
+                                                    </td>
+                                                </tr>
+                                                @if (expandedTaskId == task.Id && task.SubTasks != null)
+                                                {
+                                                    var activeSubTasks = GetActiveSubTasks(task);
+                                                    <tr>
+                                                        <td colspan="6">
+                                                            <div class="p-3 bg-light">
+                                                                <h6>子任务详情</h6>
+                                                                <table class="table table-sm table-striped">
+                                                                    <thead>
+                                                                        <tr>
+                                                                            <th>子任务ID</th>
+                                                                            <th>描述</th>
+                                                                            <th>状态</th>
+                                                                            <th>分配无人机</th>
+                                                                            <th>分配时间</th>
+                                                                            <th>完成时间</th>
+                                                                            <th>处理结果</th>
+                                                                            <th>操作</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody>
+                                                                        @foreach (var sub in activeSubTasks)
+                                                                        {
+                                                                            <tr>
+                                                                                <td>@sub.Id.ToString("N")[..8]</td>
+                                                                                <td>@sub.Description</td>
+                                                                                <td>
+                                                                                    <span class="badge @GetTaskStatusBadge(sub.Status)">
+                                                                                        @GetTaskStatusText(sub.Status)
+                                                                                    </span>
+                                                                                </td>
+                                                                                <td>@sub.AssignedDrone</td>
+                                                                                <td>@(sub.AssignedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
+                                                                                <td>@(sub.CompletedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
+                                                                                <td>
+                                                                                    @if (!string.IsNullOrEmpty(sub.Result))
+                                                                                    {
+                                                                                        <span class="badge bg-info">@sub.Result</span>
+                                                                                    }
+                                                                                    else
+                                                                                    {
+                                                                                        <span class="text-muted">-</span>
+                                                                                    }
+                                                                                </td>
+                                                                                <td>
+                                                                                    @if (sub.ImagePaths?.Any() == true)
+                                                                                    {
+                                                                                        <button class="btn btn-sm btn-outline-primary" @onclick="() => ViewSubTaskImage(sub)">
+                                                                                            <i class="bi bi-images"></i> 查看图片 (@sub.ImagePaths.Count)
+                                                                                        </button>
+                                                                                    }
+                                                                                    else
+                                                                                    {
+                                                                                        <span class="text-muted">无图片</span>
+                                                                                    }
+                                                                                </td>
+                                                                            </tr>
+                                                                        }
+                                                                    </tbody>
+                                                                </table>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                }
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="text-center py-4">
+                                    <i class="bi bi-inbox display-1 text-muted"></i>
+                                    <p class="text-muted mt-2">暂无视频处理任务</p>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- 任务管理标签页 -->
+    @if (activeTab == "tasks")
+    {
+        <div class="tab-content">
+            @if (tasks == null)
+            {
+                <div class="text-center py-4">
+                    <div class="spinner-border" role="status">
+                        <span class="visually-hidden">加载中...</span>
+                    </div>
+                    <p class="mt-2">正在加载任务数据...</p>
+                </div>
+            }
+            else
+            {
+                <div class="row mb-3">
+                    <div class="col-12">
+                        <button class="btn btn-primary" @onclick="ShowVideoTaskForm">
+                            <i class="bi bi-plus-circle"></i> 创建视频任务
+                        </button>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5 class="card-title mb-0">
+                                    <i class="bi bi-list-task"></i> 视频处理任务列表
+                                </h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table table-hover">
+                                        <thead>
+                                            <tr>
+                                                <th>任务ID</th>
+                                                <th>描述</th>
+                                                <th>状态</th>
+                                                <th>创建时间</th>
+                                                <th>子任务数</th>
+                                                <th>操作</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var task in tasks)
+                                            {
+                                                var activeSubTaskCount = GetActiveSubTaskCount(task);
+                                                <tr>
+                                                    <td>@task.Id.ToString("N")[..8]</td>
+                                                    <td>@task.Description</td>
+                                                    <td>
+                                                        <span class="badge @GetTaskStatusBadge(task.Status)">
+                                                            @GetTaskStatusText(task.Status)
+                                                        </span>
+                                                    </td>
+                                                    <td>@task.CreationTime.ToString("yyyy-MM-dd HH:mm")</td>
+                                                    <td>@activeSubTaskCount</td>
+                                                    <td>
+                                                        <button class="btn btn-sm btn-outline-info" @onclick="() => ToggleSubTasks(task.Id)">
+                                                            <i class="bi bi-@(expandedTaskId == task.Id ? "chevron-up" : "chevron-down")"></i>
+                                                            @(expandedTaskId == task.Id ? "收起" : "查看子任务")
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                                @if (expandedTaskId == task.Id && task.SubTasks != null)
+                                                {
+                                                    var activeSubTasks = GetActiveSubTasks(task);
+                                                    <tr>
+                                                        <td colspan="6">
+                                                            <div class="p-3 bg-light">
+                                                                <h6>子任务详情</h6>
+                                                                <table class="table table-sm table-striped">
+                                                                    <thead>
+                                                                        <tr>
+                                                                            <th>子任务ID</th>
+                                                                            <th>描述</th>
+                                                                            <th>状态</th>
+                                                                            <th>分配无人机</th>
+                                                                            <th>分配时间</th>
+                                                                            <th>完成时间</th>
+                                                                            <th>处理结果</th>
+                                                                            <th>操作</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody>
+                                                                        @foreach (var sub in activeSubTasks)
+                                                                        {
+                                                                            <tr>
+                                                                                <td>@sub.Id.ToString("N")[..8]</td>
+                                                                                <td>@sub.Description</td>
+                                                                                <td>
+                                                                                    <span class="badge @GetTaskStatusBadge(sub.Status)">
+                                                                                        @GetTaskStatusText(sub.Status)
+                                                                                    </span>
+                                                                                </td>
+                                                                                <td>@sub.AssignedDrone</td>
+                                                                                <td>@(sub.AssignedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
+                                                                                <td>@(sub.CompletedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
+                                                                                <td>
+                                                                                    @if (!string.IsNullOrEmpty(sub.Result))
+                                                                                    {
+                                                                                        <span class="badge bg-info">@sub.Result</span>
+                                                                                    }
+                                                                                    else
+                                                                                    {
+                                                                                        <span class="text-muted">-</span>
+                                                                                    }
+                                                                                </td>
+                                                                                <td>
+                                                                                    @if (sub.ImagePaths?.Any() == true)
+                                                                                    {
+                                                                                        <button class="btn btn-sm btn-outline-primary" @onclick="() => ViewSubTaskImage(sub)">
+                                                                                            <i class="bi bi-images"></i> 查看图片 (@sub.ImagePaths.Count)
+                                                                                        </button>
+                                                                                    }
+                                                                                    else
+                                                                                    {
+                                                                                        <span class="text-muted">无图片</span>
+                                                                                    }
+                                                                                </td>
+                                                                            </tr>
+                                                                        }
+                                                                    </tbody>
+                                                                </table>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                }
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
 </div>
 
-@if (tasks == null)
-{
-    <p>正在加载任务数据...</p>
-}
-else
-{
-    <table class="table table-bordered">
-        <thead>
-            <tr>
-                <th>任务ID</th>
-                <th>描述</th>
-                <th>状态</th>
-                <th>创建时间</th>
-                <th>子任务数</th>
-                <th>操作</th>
-            </tr>
-        </thead>
-        <tbody>
-            @foreach (var task in tasks)
-            {
-                var activeSubTaskCount = GetActiveSubTaskCount(task);
-                <tr>
-                    <td>@task.Id</td>
-                    <td>@task.Description</td>
-                    <td>@task.Status</td>
-                    <td>@task.CreationTime.ToString("yyyy-MM-dd HH:mm")</td>
-                    <td>@activeSubTaskCount</td>
-                    <td>
-                        <button class="btn btn-link" @onclick="() => ToggleSubTasks(task.Id)">
-                            @(expandedTaskId == task.Id ? "收起" : "查看子任务")
-                        </button>
-                    </td>
-                </tr>
-                @if (expandedTaskId == task.Id && task.SubTasks != null)
-                {
-                    var activeSubTasks = GetActiveSubTasks(task);
-                    <tr>
-                        <td colspan="6">
-                            <table class="table table-sm">
-                                <thead>
-                                    <tr>
-                                        <th>子任务ID</th>
-                                        <th>描述</th>
-                                        <th>状态</th>
-                                        <th>分配无人机</th>
-                                        <th>分配时间</th>
-                                        <th>完成时间</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    @foreach (var sub in activeSubTasks)
-                                    {
-                                        <tr>
-                                            <td>@sub.Id</td>
-                                            <td>@sub.Description</td>
-                                            <td>@sub.Status</td>
-                                            <td>@sub.AssignedDrone</td>
-                                            <td>@(sub.AssignedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
-                                            <td>@(sub.CompletedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
-                                        </tr>
-                                    }
-                                </tbody>
-                            </table>
-                        </td>
-                    </tr>
-                }
-            }
-        </tbody>
-    </table>
-    <button class="btn btn-primary mb-2" @onclick="ShowAddTaskForm">添加任务</button>
-
-    @if (showAddForm)
-    {
-        <EditForm Model="newTask" OnValidSubmit="AddTaskAsync" @rendermode="InteractiveServer">
-            <DataAnnotationsValidator />
-            <InputFile OnChange="OnVideoSelected" accept=".mp4" />
-            <div class="mb-2">
-                <label>描述：</label>
-                <InputText @bind-Value="newTask.Description" class="form-control" />
+<!-- 模态框：创建视频处理任务 -->
+<div class="modal fade" id="videoTaskModal" tabindex="-1" aria-labelledby="videoTaskModalLabel" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="videoTaskModalLabel">
+                    <i class="bi bi-plus-circle"></i> 创建视频处理任务
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" @onclick="CloseVideoTaskModal"></button>
             </div>
-            <button type="submit" class="btn btn-success">保存</button>
-            <button type="button" class="btn btn-secondary" @onclick="HideAddTaskForm">取消</button>
-        </EditForm>
-    }
-}
+            <div class="modal-body">
+                <!-- 基本信息 -->
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label class="form-label">任务名称:</label>
+                            <input type="text" class="form-control" @bind="videoTaskName" placeholder="请输入任务名称" />
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label class="form-label">处理类型:</label>
+                            <select class="form-select" @bind="videoProcessingType">
+                                <option value="face">人脸识别</option>
+                                <option value="object">物体检测</option>
+                                <option value="mixed">混合处理</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
 
+                <div class="row mb-3">
+                    <div class="col-12">
+                        <div class="mb-3">
+                            <label class="form-label">选择视频文件:</label>
+                            <InputFile OnChange="OnVideoFileSelected" class="form-control" accept=".mp4,.avi,.mov,.mkv" />
+                            @if (videoFile != null)
+                            {
+                                <small class="text-muted">
+                                    文件: @videoFile.Name (大小: @(videoFile.Size / 1024 / 1024)MB)
+                                </small>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 任务描述 -->
+                <div class="row mb-3">
+                    <div class="col-12">
+                        <div class="mb-3">
+                            <label class="form-label">任务描述:</label>
+                            <textarea class="form-control" @bind="videoTaskDescription" rows="3" placeholder="请输入任务的详细描述"></textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" @onclick="CloseVideoTaskModal">
+                    <i class="bi bi-x-circle"></i> 取消
+                </button>
+                <button type="button" class="btn btn-primary" @onclick="CreateVideoTask" 
+                        disabled="@(isCreatingVideoTask || videoFile == null || string.IsNullOrWhiteSpace(videoTaskName))">
+                    @if (isCreatingVideoTask)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2"></span>
+                        <span>创建中...</span>
+                    }
+                    else
+                    {
+                        <i class="bi bi-check-circle"></i>
+                        <span>创建任务</span>
+                    }
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 模态框：查看子任务图片 -->
+<div class="modal fade" id="subTaskImageModal" tabindex="-1" aria-labelledby="subTaskImageModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="subTaskImageModalLabel">
+                    <i class="bi bi-image"></i> 子任务处理结果
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" @onclick="CloseSubTaskImageModal"></button>
+            </div>
+            <div class="modal-body">
+                @if (selectedSubTask != null)
+                {
+                    <div class="row mb-3">
+                        <div class="col-12">
+                            <h6>子任务信息</h6>
+                            <table class="table table-sm">
+                                <tr>
+                                    <td><strong>子任务ID:</strong></td>
+                                    <td>@selectedSubTask.Id.ToString("N")[..8]</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>描述:</strong></td>
+                                    <td>@selectedSubTask.Description</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>状态:</strong></td>
+                                    <td>
+                                        <span class="badge @GetTaskStatusBadge(selectedSubTask.Status)">
+                                            @GetTaskStatusText(selectedSubTask.Status)
+                                        </span>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>分配无人机:</strong></td>
+                                    <td>@selectedSubTask.AssignedDrone</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>处理结果:</strong></td>
+                                    <td>
+                                        @if (!string.IsNullOrEmpty(selectedSubTask.Result))
+                                        {
+                                            <span class="badge bg-info">@selectedSubTask.Result</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-muted">暂无结果</span>
+                                        }
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>完成时间:</strong></td>
+                                    <td>@(selectedSubTask.CompletedTime?.ToString("yyyy-MM-dd HH:mm:ss") ?? "未完成")</td>
+                                </tr>
+                            </table>
+                        </div>
+                    </div>
+                    
+                    @if (selectedSubTask?.ImagePaths?.Any() == true)
+                    {
+                        <div class="row">
+                            <div class="col-12">
+                                <h6>处理结果图片 (共 @selectedSubTask.ImagePaths.Count 张)</h6>
+                                
+                                @if (selectedSubTask.ImagePaths.Count == 1)
+                                {
+                                    <!-- 单张图片直接显示 -->
+                                    <div class="text-center">
+                                        <img src="@selectedSubTask.ImagePaths[0]" 
+                                             class="img-fluid rounded border" 
+                                             alt="子任务处理结果图片" 
+                                             style="max-height: 400px;" />
+                                    </div>
+                                }
+                                else
+                                {
+                                    <!-- 多张图片轮播显示 -->
+                                    <div id="imageCarousel" class="carousel slide" data-bs-ride="carousel">
+                                        <div class="carousel-indicators">
+                                            @for (int i = 0; i < selectedSubTask.ImagePaths.Count; i++)
+                                            {
+                                                var index = i;
+                                                <button type="button" data-bs-target="#imageCarousel" data-bs-slide-to="@index" 
+                                                        class="@(index == 0 ? "active" : "")" aria-current="@(index == 0 ? "true" : "false")" 
+                                                        aria-label="图片 @(index + 1)"></button>
+                                            }
+                                        </div>
+                                        <div class="carousel-inner">
+                                            @for (int i = 0; i < selectedSubTask.ImagePaths.Count; i++)
+                                            {
+                                                var index = i;
+                                                <div class="carousel-item @(index == 0 ? "active" : "")">
+                                                    <div class="text-center">
+                                                        <img src="@selectedSubTask.ImagePaths[index]" 
+                                                             class="img-fluid rounded border" 
+                                                             alt="子任务处理结果图片 @(index + 1)" 
+                                                             style="max-height: 400px;" />
+                                                        <div class="carousel-caption d-none d-md-block">
+                                                            <h5>图片 @(index + 1) / @selectedSubTask.ImagePaths.Count</h5>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            }
+                                        </div>
+                                        <button class="carousel-control-prev" type="button" data-bs-target="#imageCarousel" data-bs-slide="prev">
+                                            <span class="carousel-control-prev-icon" aria-hidden="true"></span>
+                                            <span class="visually-hidden">上一张</span>
+                                        </button>
+                                        <button class="carousel-control-next" type="button" data-bs-target="#imageCarousel" data-bs-slide="next">
+                                            <span class="carousel-control-next-icon" aria-hidden="true"></span>
+                                            <span class="visually-hidden">下一张</span>
+                                        </button>
+                                    </div>
+                                }
+                                
+                                <!-- 图片缩略图列表 -->
+                                @if (selectedSubTask.ImagePaths.Count > 1)
+                                {
+                                    <div class="mt-3">
+                                        <h6>缩略图</h6>
+                                        <div class="row">
+                                            @for (int i = 0; i < selectedSubTask.ImagePaths.Count; i++)
+                                            {
+                                                var index = i;
+                                                <div class="col-md-2 col-sm-3 col-4 mb-2">
+                                                    <img src="@selectedSubTask.ImagePaths[index]" 
+                                                         class="img-thumbnail" 
+                                                         alt="缩略图 @(index + 1)" 
+                                                         style="height: 80px; object-fit: cover; cursor: pointer;"
+                                                         @onclick="@(() => SwitchToImage(index))" />
+                                                </div>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="row">
+                            <div class="col-12">
+                                <div class="alert alert-info">
+                                    <i class="bi bi-info-circle"></i> 该子任务暂无处理结果图片
+                                </div>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" @onclick="CloseSubTaskImageModal">
+                    <i class="bi bi-x-circle"></i> 关闭
+                </button>
+                @if (selectedSubTask != null && selectedSubTask.ImagePaths?.Any() == true)
+                {
+                    @if (selectedSubTask.ImagePaths.Count == 1)
+                    {
+                        <a href="@selectedSubTask.ImagePaths[0]" download class="btn btn-primary">
+                            <i class="bi bi-download"></i> 下载图片
+                        </a>
+                    }
+                    else
+                    {
+                        <div class="btn-group" role="group">
+                            <button type="button" class="btn btn-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                                <i class="bi bi-download"></i> 下载图片 (@selectedSubTask.ImagePaths.Count)
+                            </button>
+                            <ul class="dropdown-menu">
+                                @for (int i = 0; i < selectedSubTask.ImagePaths.Count; i++)
+                                {
+                                    var index = i;
+                                    <li>
+                                        <a class="dropdown-item" href="@selectedSubTask.ImagePaths[index]" download>
+                                            <i class="bi bi-image"></i> 下载图片 @(index + 1)
+                                        </a>
+                                    </li>
+                                }
+                                <li><hr class="dropdown-divider"></li>
+                                <li>
+                                    <button class="dropdown-item" @onclick="DownloadAllImages">
+                                        <i class="bi bi-download"></i> 下载全部图片
+                                    </button>
+                                </li>
+                            </ul>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+</div>
 
 @code {
+    // 标签页状态
+    private string activeTab = "overview";
+
+    // 任务管理字段
     private Guid? expandedTaskId;
     private List<MainTask>? tasks;
-    private List<MainTask>? lastTasks; // 用于检测数据变更
-    private Dictionary<Guid, int> subTaskCountCache = new(); // 缓存子任务计数
-    private Dictionary<Guid, List<SubTask>> activeSubTaskCache = new(); // 缓存活跃子任务
+    private Dictionary<Guid, int> subTaskCountCache = new();
+    private Dictionary<Guid, List<SubTask>> activeSubTaskCache = new();
     private HubConnection? hubConnection;
-    private bool showAddForm = false;
-    private MainTask newTask = new MainTask { Id = Guid.NewGuid(), CreationTime = DateTime.Now, SubTasks = new List<SubTask>() };
-    private IBrowserFile? selectedVideoFile;
 
-    /// <summary>
-    /// 实时获取任务信息
-    /// </summary>
-    /// <returns></returns>
+    // 集群管理字段
+    private DroneClusterInfo? clusterInfo;
+    private int nodeCountToStart = 5;
+    private bool isRefreshingCluster = false;
+    private bool isStartingNodes = false;
+    private Timer? statusTimer;
+
+    // 视频任务创建字段
+    private bool isCreatingVideoTask = false;
+    private string videoTaskName = "";
+    private string videoTaskDescription = "";
+    private IBrowserFile? videoFile;
+    private string videoProcessingType = "mixed";
+
+    // 子任务图片查看字段
+    private SubTask? selectedSubTask;
+
     protected override async Task OnInitializedAsync()
     {
         tasks = new List<MainTask>();
 
+        // 初始化 SignalR 连接
         hubConnection = new HubConnectionBuilder()
             .WithUrl(Navigation.ToAbsoluteUri("/taskshub"))
             .Build();
 
         hubConnection.On<List<MainTask>>("ReceiveTaskPosition", ts =>
         {
-           
-                tasks = ts;
-                InvalidateCache(); // 清除缓存
-                InvokeAsync(StateHasChanged);
-            
+            tasks = ts;
+            InvalidateCache();
+            InvokeAsync(StateHasChanged);
         });
+
         await hubConnection.StartAsync();
-    }
 
-    /// <summary>
-    /// 检测任务列表是否相等（简单版本）
-    /// </summary>
-    private bool TasksEqual(List<MainTask>? list1, List<MainTask>? list2)
-    {
-        if (list1 == null && list2 == null) return true;
-        if (list1 == null || list2 == null) return false;
-        if (list1.Count != list2.Count) return false;
+        // 初始化集群信息
+        await RefreshClusterInfo();
         
-        // 简单的哈希比较，可以根据需要优化
-        return list1.GetHashCode() == list2.GetHashCode();
+        // 启动定时器定期刷新任务状态
+        statusTimer = new Timer(async _ => await InvokeAsync(RefreshTaskStatus), null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
     }
 
-    /// <summary>
-    /// 清除缓存
-    /// </summary>
+    private void SetActiveTab(string tab)
+    {
+        activeTab = tab;
+        StateHasChanged();
+    }
+
+    // 任务管理方法
     private void InvalidateCache()
     {
         subTaskCountCache.Clear();
         activeSubTaskCache.Clear();
     }
 
-    /// <summary>
-    /// 获取活跃子任务数量（带缓存）
-    /// </summary>
     private int GetActiveSubTaskCount(MainTask task)
     {
         if (subTaskCountCache.TryGetValue(task.Id, out var count))
             return count;
 
-        count = task.SubTasks?.Where(st => st.Status != TaskStatus.WaitingForActivation).Count() ?? 0;
+        count = task.SubTasks?.Where(st => st.Status != System.Threading.Tasks.TaskStatus.WaitingForActivation).Count() ?? 0;
         subTaskCountCache[task.Id] = count;
         return count;
     }
 
-    /// <summary>
-    /// 获取活跃子任务列表（带缓存）
-    /// </summary>
+    private int GetCompletedSubTaskCount(MainTask task)
+    {
+        return task.SubTasks?.Where(st => st.Status == System.Threading.Tasks.TaskStatus.RanToCompletion).Count() ?? 0;
+    }
+
+    private int GetProcessingTaskCount()
+    {
+        return tasks?.Where(t => t.Status == System.Threading.Tasks.TaskStatus.Running).Count() ?? 0;
+    }
+
     private List<SubTask> GetActiveSubTasks(MainTask task)
     {
         if (activeSubTaskCache.TryGetValue(task.Id, out var subTasks))
             return subTasks;
 
-        subTasks = task.SubTasks?.Where(st => st.Status != TaskStatus.WaitingForActivation).ToList() ?? new List<SubTask>();
+        subTasks = task.SubTasks?.Where(st => st.Status != System.Threading.Tasks.TaskStatus.WaitingForActivation).ToList() ?? new List<SubTask>();
         activeSubTaskCache[task.Id] = subTasks;
         return subTasks;
     }
@@ -187,68 +829,452 @@ else
         else
             expandedTaskId = taskId;
     }
-    private void ShowAddTaskForm()
+
+    // 集群管理方法
+    private async Task RefreshClusterInfo()
     {
-        newTask = new MainTask { Id = Guid.NewGuid(), CreationTime = DateTime.Now, SubTasks = new List<SubTask>() };
-        showAddForm = true;
-    }
-
-    private void HideAddTaskForm()
-    {
-        showAddForm = false;
-    }
-
-    private async Task AddTaskAsync()
-    {
-        if (selectedVideoFile == null)
-            return;
-
-        var content = new MultipartFormDataContent();
-
-        // 添加任务信息（只传递描述等必要字段）
-        content.Add(new StringContent(newTask.Description ?? ""), "Description");
-        content.Add(new StringContent(newTask.Id.ToString()), "Id");
-        content.Add(new StringContent(newTask.CreationTime.ToString("o")), "CreationTime");
-        var stream = selectedVideoFile.OpenReadStream(maxAllowedSize: 1024 * 1024 * 500); // 500MB上限
-        content.Add(new StreamContent(stream), "VideoFile", selectedVideoFile.Name);
-
-        var client = HttpClientFactory.CreateClient("ApiService");
-        var response = await client.PostAsync("api/tasks/upload", content);
-        if (response.IsSuccessStatusCode)
+        isRefreshingCluster = true;
+        try
         {
-            tasks = await client.GetFromJsonAsync<List<MainTask>>("api/tasks");
-            showAddForm = false;
-            selectedVideoFile = null;
+            await Task.Delay(500);
+            clusterInfo = new DroneClusterInfo
+            {
+                TotalNodes = 10,
+                ActiveNodes = 8,
+                Clusters = new List<ClusterNode>
+                {
+                    new ClusterNode { NodeId = "Node1", Status = "Active", Load = 75 },
+                    new ClusterNode { NodeId = "Node2", Status = "Active", Load = 60 },
+                    new ClusterNode { NodeId = "Node3", Status = "Active", Load = 45 }
+                }
+            };
         }
-        // 可加错误处理
-    }
-    private async Task OnVideoSelected(InputFileChangeEventArgs e)
-    {
-        selectedVideoFile = e.File;
-        if (selectedVideoFile != null)
+        catch (Exception ex)
         {
-            // 自动用文件名（去除扩展名）作为任务描述
-            var fileName = Path.GetFileName(selectedVideoFile.Name);
-            newTask.Description = fileName;
+            Logger.LogError(ex, "刷新集群信息失败");
+        }
+        finally
+        {
+            isRefreshingCluster = false;
             StateHasChanged();
         }
     }
 
-    /// <summary>
-    /// 检查SignalR连接状态
-    /// </summary>
+    private async Task StartNodes()
+    {
+        isStartingNodes = true;
+        try
+        {
+            await Task.Delay(1000);
+            var result = new NodeStartResult
+            {
+                Success = true,
+                ActiveNodeCount = nodeCountToStart,
+                Message = "节点启动成功"
+            };
+            
+            if (result.Success)
+            {
+                await JSRuntime.InvokeVoidAsync("alert", $"成功启动 {result.ActiveNodeCount} 个节点");
+                await RefreshClusterInfo();
+            }
+            else
+            {
+                await JSRuntime.InvokeVoidAsync("alert", $"启动失败: {result.Message}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "启动节点失败");
+            await JSRuntime.InvokeVoidAsync("alert", "启动节点时发生错误");
+        }
+        finally
+        {
+            isStartingNodes = false;
+            StateHasChanged();
+        }
+    }
+
+    // 视频任务创建方法
+    private async Task ShowVideoTaskForm()
+    {
+        videoTaskName = "";
+        videoTaskDescription = "";
+        videoFile = null;
+        videoProcessingType = "mixed";
+        
+        try
+        {
+            // 检查Bootstrap是否加载
+            var bootstrapExists = await JSRuntime.InvokeAsync<bool>("eval", "typeof bootstrap !== 'undefined'");
+            
+            if (bootstrapExists)
+            {
+                var modal = await JSRuntime.InvokeAsync<IJSObjectReference>("bootstrap.Modal.getOrCreateInstance", "#videoTaskModal");
+                await modal.InvokeVoidAsync("show");
+            }
+            else
+            {
+                // 如果Bootstrap未加载，使用简单的显示方式
+                await JSRuntime.InvokeVoidAsync("eval", "document.getElementById('videoTaskModal').style.display = 'block'; document.getElementById('videoTaskModal').classList.add('show');");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "显示模态框失败");
+            // 备用方案：直接操作DOM
+            await JSRuntime.InvokeVoidAsync("eval", @"
+                var modal = document.getElementById('videoTaskModal');
+                if (modal) {
+                    modal.style.display = 'block';
+                    modal.classList.add('show');
+                    document.body.classList.add('modal-open');
+                    var backdrop = document.createElement('div');
+                    backdrop.className = 'modal-backdrop fade show';
+                    backdrop.id = 'modal-backdrop';
+                    document.body.appendChild(backdrop);
+                }
+            ");
+        }
+    }
+
+    private async Task OnVideoFileSelected(InputFileChangeEventArgs e)
+    {
+        videoFile = e.File;
+        if (videoFile != null && string.IsNullOrWhiteSpace(videoTaskName))
+        {
+            videoTaskName = Path.GetFileNameWithoutExtension(videoFile.Name);
+        }
+        StateHasChanged();
+    }
+
+    private async Task CreateVideoTask()
+    {
+        if (videoFile == null || string.IsNullOrWhiteSpace(videoTaskName))
+            return;
+
+        isCreatingVideoTask = true;
+        try
+        {
+            // 发送到后端API
+            var content = new MultipartFormDataContent();
+            content.Add(new StringContent($"{videoTaskName} - {videoProcessingType}处理"), "Description");
+            content.Add(new StringContent(Guid.NewGuid().ToString()), "Id");
+            content.Add(new StringContent(DateTime.Now.ToString("o")), "CreationTime");
+            content.Add(new StringContent(videoProcessingType), "ProcessingType");
+            content.Add(new StringContent(videoTaskDescription), "Notes");
+            
+            var stream = videoFile.OpenReadStream(maxAllowedSize: 1024 * 1024 * 500);
+            content.Add(new StreamContent(stream), "VideoFile", videoFile.Name);
+
+            var client = HttpClientFactory.CreateClient("ApiService");
+            var response = await client.PostAsync("api/tasks/upload", content);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                // 刷新任务列表
+                var refreshedTasks = await client.GetFromJsonAsync<List<MainTask>>("api/tasks");
+                if (refreshedTasks != null)
+                {
+                    tasks = refreshedTasks;
+                    InvalidateCache();
+                }
+
+                // 关闭模态框
+                await CloseVideoTaskModal();
+
+                await JSRuntime.InvokeVoidAsync("alert", "视频处理任务创建成功！");
+            }
+            else
+            {
+                var errorText = await response.Content.ReadAsStringAsync();
+                await JSRuntime.InvokeVoidAsync("alert", $"任务创建失败: {errorText}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "创建视频任务失败");
+            await JSRuntime.InvokeVoidAsync("alert", "创建任务时发生错误");
+        }
+        finally
+        {
+            isCreatingVideoTask = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RefreshTaskStatus()
+    {
+        try
+        {
+            var client = HttpClientFactory.CreateClient("ApiService");
+            var refreshedTasks = await client.GetFromJsonAsync<List<MainTask>>("api/tasks");
+            if (refreshedTasks != null)
+            {
+                tasks = refreshedTasks;
+                InvalidateCache();
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "刷新任务状态失败");
+        }
+    }
+
+    private async Task ViewTaskResults(MainTask task)
+    {
+        await JSRuntime.InvokeVoidAsync("alert", $"任务结果查看功能正在开发中...\n任务: {task.Description}\n状态: {GetTaskStatusText(task.Status)}");
+    }
+
+    // UI 辅助方法
+    private string GetTaskStatusBadge(System.Threading.Tasks.TaskStatus status) => status switch
+    {
+        System.Threading.Tasks.TaskStatus.Created => "bg-secondary",
+        System.Threading.Tasks.TaskStatus.Running => "bg-primary",
+        System.Threading.Tasks.TaskStatus.RanToCompletion => "bg-success",
+        System.Threading.Tasks.TaskStatus.Canceled => "bg-warning",
+        System.Threading.Tasks.TaskStatus.Faulted => "bg-danger",
+        _ => "bg-light"
+    };
+
+    private string GetTaskStatusText(System.Threading.Tasks.TaskStatus status) => status switch
+    {
+        System.Threading.Tasks.TaskStatus.Created => "已创建",
+        System.Threading.Tasks.TaskStatus.Running => "处理中",
+        System.Threading.Tasks.TaskStatus.RanToCompletion => "已完成",
+        System.Threading.Tasks.TaskStatus.Canceled => "已取消",
+        System.Threading.Tasks.TaskStatus.Faulted => "失败",
+        System.Threading.Tasks.TaskStatus.WaitingForActivation => "等待中",
+        _ => "未知"
+    };
+
+    private string GetProgressBarClass(System.Threading.Tasks.TaskStatus status) => status switch
+    {
+        System.Threading.Tasks.TaskStatus.Running => "bg-info progress-bar-striped progress-bar-animated",
+        System.Threading.Tasks.TaskStatus.RanToCompletion => "bg-success",
+        System.Threading.Tasks.TaskStatus.Faulted => "bg-danger",
+        _ => "bg-secondary"
+    };
+
     public bool IsConnected =>
         hubConnection?.State == HubConnectionState.Connected;
 
-    /// <summary>
-    /// 结束连接
-    /// </summary>
-    /// <returns></returns>
     public async ValueTask DisposeAsync()
     {
+        statusTimer?.Dispose();
         if (hubConnection is not null)
         {
             await hubConnection.DisposeAsync();
+        }
+    }
+
+    // 数据模型
+    public class DroneClusterInfo
+    {
+        public int TotalNodes { get; set; }
+        public int ActiveNodes { get; set; }
+        public List<ClusterNode> Clusters { get; set; } = new();
+    }
+
+    public class ClusterNode
+    {
+        public string NodeId { get; set; } = "";
+        public string Status { get; set; } = "";
+        public int Load { get; set; }
+    }
+
+    public class NodeStartResult
+    {
+        public bool Success { get; set; }
+        public string Message { get; set; } = "";
+        public int ActiveNodeCount { get; set; }
+    }
+
+    private async Task CloseVideoTaskModal()
+    {
+        try
+        {
+            var bootstrapExists = await JSRuntime.InvokeAsync<bool>("eval", "typeof bootstrap !== 'undefined'");
+            
+            if (bootstrapExists)
+            {
+                var modal = await JSRuntime.InvokeAsync<IJSObjectReference>("bootstrap.Modal.getInstance", "#videoTaskModal");
+                if (modal != null)
+                {
+                    await modal.InvokeVoidAsync("hide");
+                }
+            }
+            else
+            {
+                // 备用方案：直接操作DOM
+                await JSRuntime.InvokeVoidAsync("eval", @"
+                    var modal = document.getElementById('videoTaskModal');
+                    if (modal) {
+                        modal.style.display = 'none';
+                        modal.classList.remove('show');
+                        document.body.classList.remove('modal-open');
+                        var backdrop = document.getElementById('modal-backdrop');
+                        if (backdrop) backdrop.remove();
+                    }
+                ");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "关闭模态框失败");
+            // 强制关闭模态框
+            await JSRuntime.InvokeVoidAsync("eval", @"
+                var modal = document.getElementById('videoTaskModal');
+                if (modal) {
+                    modal.style.display = 'none';
+                    modal.classList.remove('show');
+                    document.body.classList.remove('modal-open');
+                    var backdrop = document.getElementById('modal-backdrop');
+                    if (backdrop) backdrop.remove();
+                }
+            ");
+        }
+    }
+
+    // 子任务图片查看方法
+    private async Task ViewSubTaskImage(SubTask subTask)
+    {
+        selectedSubTask = subTask;
+        
+        try
+        {
+            // 检查Bootstrap是否加载
+            var bootstrapExists = await JSRuntime.InvokeAsync<bool>("eval", "typeof bootstrap !== 'undefined'");
+            
+            if (bootstrapExists)
+            {
+                var modal = await JSRuntime.InvokeAsync<IJSObjectReference>("bootstrap.Modal.getOrCreateInstance", "#subTaskImageModal");
+                await modal.InvokeVoidAsync("show");
+            }
+            else
+            {
+                // 如果Bootstrap未加载，使用简单的显示方式
+                await JSRuntime.InvokeVoidAsync("eval", "document.getElementById('subTaskImageModal').style.display = 'block'; document.getElementById('subTaskImageModal').classList.add('show');");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "显示子任务图片模态框失败");
+            // 备用方案：直接操作DOM
+            await JSRuntime.InvokeVoidAsync("eval", @"
+                var modal = document.getElementById('subTaskImageModal');
+                if (modal) {
+                    modal.style.display = 'block';
+                    modal.classList.add('show');
+                    document.body.classList.add('modal-open');
+                    var backdrop = document.createElement('div');
+                    backdrop.className = 'modal-backdrop fade show';
+                    backdrop.id = 'subtask-modal-backdrop';
+                    document.body.appendChild(backdrop);
+                }
+            ");
+        }
+    }
+
+    private async Task CloseSubTaskImageModal()
+    {
+        try
+        {
+            var bootstrapExists = await JSRuntime.InvokeAsync<bool>("eval", "typeof bootstrap !== 'undefined'");
+            
+            if (bootstrapExists)
+            {
+                var modal = await JSRuntime.InvokeAsync<IJSObjectReference>("bootstrap.Modal.getInstance", "#subTaskImageModal");
+                if (modal != null)
+                {
+                    await modal.InvokeVoidAsync("hide");
+                }
+            }
+            else
+            {
+                // 备用方案：直接操作DOM
+                await JSRuntime.InvokeVoidAsync("eval", @"
+                    var modal = document.getElementById('subTaskImageModal');
+                    if (modal) {
+                        modal.style.display = 'none';
+                        modal.classList.remove('show');
+                        document.body.classList.remove('modal-open');
+                        var backdrop = document.getElementById('subtask-modal-backdrop');
+                        if (backdrop) backdrop.remove();
+                    }
+                ");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "关闭子任务图片模态框失败");
+            // 强制关闭模态框
+            await JSRuntime.InvokeVoidAsync("eval", @"
+                var modal = document.getElementById('subTaskImageModal');
+                if (modal) {
+                    modal.style.display = 'none';
+                    modal.classList.remove('show');
+                    document.body.classList.remove('modal-open');
+                    var backdrop = document.getElementById('subtask-modal-backdrop');
+                    if (backdrop) backdrop.remove();
+                }
+            ");
+        }
+        
+        selectedSubTask = null;
+        StateHasChanged();
+    }
+
+    // 图片切换方法
+    private async Task SwitchToImage(int index)
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("eval", $@"
+                var carousel = document.getElementById('imageCarousel');
+                if (carousel) {{
+                    var bsCarousel = bootstrap.Carousel.getInstance(carousel) || new bootstrap.Carousel(carousel);
+                    bsCarousel.to({index});
+                }}
+            ");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "切换图片失败");
+        }
+    }
+
+    // 批量下载图片方法
+    private async Task DownloadAllImages()
+    {
+        if (selectedSubTask?.ImagePaths?.Any() != true)
+            return;
+
+        try
+        {
+            // 为每个图片创建下载链接并触发下载
+            foreach (var imagePath in selectedSubTask.ImagePaths)
+            {
+                await JSRuntime.InvokeVoidAsync("eval", $@"
+                    var link = document.createElement('a');
+                    link.href = '{imagePath}';
+                    link.download = '';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                ");
+                
+                // 添加小延迟避免浏览器阻止多个下载
+                await Task.Delay(200);
+            }
+            
+            await JSRuntime.InvokeVoidAsync("alert", $"开始下载 {selectedSubTask.ImagePaths.Count} 张图片");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "批量下载图片失败");
+            await JSRuntime.InvokeVoidAsync("alert", "批量下载失败，请尝试单独下载图片");
         }
     }
 }

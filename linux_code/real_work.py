@@ -10,32 +10,210 @@ from typing import Dict, List
 from concurrent.futures import ThreadPoolExecutor
 from cluster import *
 import os 
-machine_ip="192.168.31.35"
-UI_ip="192.168.31.93"
-alg_ip="192.168.31.35"
-UI_port=5009
+import socket
+import struct
+import json
+import base64
+import configparser
+import time
+
+# 读取配置文件
+def load_config():
+    """加载配置文件，如果不存在则创建默认配置"""
+    config = configparser.ConfigParser()
+    config_file = 'mission_config.ini'
+    
+    if os.path.exists(config_file):
+        config.read(config_file)
+    else:
+        # 创建默认配置文件
+        config['DEFAULT'] = {
+            'machine_ip': '192.168.31.35',
+            'ui_ip': '192.168.31.93', 
+            'alg_ip': '192.168.31.35',
+            'ui_port': '5009',
+            'mission_socket_ip': '192.168.31.93',
+            'mission_socket_port': '8080'
+        }
+        
+        with open(config_file, 'w') as f:
+            config.write(f)
+        print(f"已创建默认配置文件: {config_file}")
+    
+    return config
+
+# 加载配置
+config = load_config()
+machine_ip = config.get('DEFAULT', 'machine_ip')
+UI_ip = config.get('DEFAULT', 'ui_ip')
+alg_ip = config.get('DEFAULT', 'alg_ip')
+UI_port = config.getint('DEFAULT', 'ui_port')
+
+# 图片传输相关配置
+MISSION_SOCKET_IP = config.get('DEFAULT', 'mission_socket_ip')
+MISSION_SOCKET_PORT = config.getint('DEFAULT', 'mission_socket_port')
 
 ans_set:Dict={}#存储每个任务的结果
-# def send_image(client_socket, file_name):
-#     try:
 
-#         file_size = os.path.getsize(file_name)
+def send_images_to_mission_service(task_id: str, subtask_id: str, image_paths: List[str], max_retries: int = 3):
+    """
+    向 MissionSocketService 发送多张图片
+    :param task_id: 任务ID
+    :param subtask_id: 子任务ID  
+    :param image_paths: 图片文件路径列表
+    :param max_retries: 最大重试次数
+    """
+    for attempt in range(max_retries):
+        try:
+            # 建立TCP连接
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(30)  # 设置30秒超时
+            sock.connect((MISSION_SOCKET_IP, MISSION_SOCKET_PORT))
+            
+            # 发送图片数据消息头
+            message_header = {
+                "type": "image_data",
+                "content": {
+                    "task_id": task_id,
+                    "subtask_name": subtask_id,
+                    "image_count": len(image_paths)
+                }
+            }
+            
+            # 发送消息头
+            header_json = json.dumps(message_header)
+            sock.sendall(header_json.encode('utf-8'))
+            
+            # 发送每张图片
+            success_count = 0
+            for i, image_path in enumerate(image_paths):
+                if os.path.exists(image_path):
+                    try:
+                        send_single_image(sock, image_path)
+                        success_count += 1
+                        print(f"已发送图片 {i+1}/{len(image_paths)}: {image_path}")
+                    except Exception as e:
+                        print(f"发送图片失败 {image_path}: {e}")
+                        break
+                else:
+                    print(f"图片文件不存在: {image_path}")
+            
+            if success_count == len(image_paths):
+                print(f"成功发送 {success_count} 张图片到 MissionSocketService")
+                sock.close()
+                return True
+            else:
+                print(f"部分图片发送失败，成功: {success_count}/{len(image_paths)}")
+                
+        except Exception as e:
+            print(f"发送图片到MissionSocketService失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                print(f"等待 {(attempt + 1) * 2} 秒后重试...")
+                time.sleep((attempt + 1) * 2)  # 递增延迟
+        finally:
+            try:
+                sock.close()
+            except:
+                pass
+    
+    print(f"发送图片失败，已重试 {max_retries} 次")
+    return False
 
-#             # 发送文件元数据（文件名长度、文件名、文件大小）
-#         file_name_bytes = file_name.encode('utf-8')
-#         client_socket.sendall(struct.pack('I', len(file_name_bytes)))  # 文件名长度
-#         client_socket.sendall(file_name_bytes)                        # 文件名
-#         client_socket.sendall(struct.pack('I', file_size))            # 文件大小
+def send_single_image(sock: socket.socket, image_path: str):
+    """
+    发送单张图片文件
+    :param sock: TCP socket连接
+    :param image_path: 图片文件路径
+    """
+    try:
+        # 获取文件信息
+        file_name = os.path.basename(image_path)
+        file_size = os.path.getsize(image_path)
+        
+        # 发送文件名长度
+        file_name_bytes = file_name.encode('utf-8')
+        sock.sendall(struct.pack('I', len(file_name_bytes)))
+        
+        # 发送文件名
+        sock.sendall(file_name_bytes)
+        
+        # 发送文件大小
+        sock.sendall(struct.pack('Q', file_size))
+        
+        # 发送文件内容
+        with open(image_path, 'rb') as f:
+            while True:
+                chunk = f.read(4096)
+                if not chunk:
+                    break
+                sock.sendall(chunk)
+                
+    except Exception as e:
+        print(f"发送单张图片失败: {e}")
 
-#             # 发送文件内容
-#         with open(file_name, 'rb') as f:
-#           while chunk := f.read(4096):
-#               client_socket.sendall(chunk)
+def send_task_completion_info(task_id: str, subtask_id: str, result: str):
+    """
+    向 MissionSocketService 发送任务完成信息
+    :param task_id: 任务ID
+    :param subtask_id: 子任务ID
+    :param result: 处理结果描述
+    """
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect((MISSION_SOCKET_IP, MISSION_SOCKET_PORT))
+        
+        # 发送任务结果消息
+        message = {
+            "type": "task_result",
+            "content": {
+                "task_id": task_id,
+                "subtask_name": subtask_id,
+                "result": result
+            }
+        }
+        
+        message_json = json.dumps(message)
+        sock.sendall(message_json.encode('utf-8'))
+        
+        print(f"已发送任务完成信息: {subtask_id} - {result}")
+        sock.close()
+        
+    except Exception as e:
+        print(f"发送任务完成信息失败: {e}")
 
+def create_folder_and_save_images_with_transmission(images, folder_name, task_id: str, subtask_id: str):
+    """
+    创建文件夹保存图片，并传输到MissionSocketService
+    :param images: 图片数据列表 [(frame_index, image), ...]
+    :param folder_name: 保存文件夹名称
+    :param task_id: 任务ID
+    :param subtask_id: 子任务ID
+    """
+    if not os.path.exists(folder_name):
+        os.makedirs(folder_name)
 
-#                #print(f"图片发送完成: {file_name}")
-#     except Exception as e:
-#         print(f"发送图片时出错: {e}")
+    image_paths = []
+    
+    for frame_index, image in images:
+        # 检查 image 是否为 NumPy 数组
+        if not isinstance(image, np.ndarray):
+            print(f"警告：索引 {frame_index} 的图片不是 NumPy 数组，跳过保存")
+            continue
+            
+        filename = os.path.join(folder_name, f"{frame_index:04d}.png")
+        cv2.imwrite(filename, image)
+        image_paths.append(filename)
+
+    print(f"所有图片已保存至 {folder_name} 文件夹，共 {len(image_paths)} 张")
+    
+    # 传输图片到MissionSocketService
+    if image_paths:
+        send_images_to_mission_service(task_id, subtask_id, image_paths)
+        
+        # 发送处理结果信息
+        result_info = f"处理完成，生成{len(image_paths)}张图片"
+        send_task_completion_info(task_id, subtask_id, result_info)
+
 def create_folder_and_save_images(images, folder_name):
     """创建文件夹并将图片保存进去，按序号命名"""
     if not os.path.exists(folder_name):
@@ -146,7 +324,7 @@ def group_segments_and_create_DAG(segments, group_count=10):
 
         info = {
             'group_index': g,
-            'segments': group_segs,        # 这里是一个包含10个“片段”的列表
+            'segments': group_segs,        # 这里是一个包含10个"片段"的列表
             'adjacency_matrix': dag_matrix,
             'size_matrix' : [sys.getsizeof(a[0][1])*len(a)*len(a[0]) for a in group_segs]
         }
@@ -317,7 +495,15 @@ class NodeWorker(threading.Thread):
                 print(f"[{subtask.subtask_id}] 完成，耗时 {subtask.processing_time:.2f}s   task_name is {self.task_name}")
                 # print(ans_set[self.task_name])
                 ans_set[self.task_name].append(subtask.ans)
-                create_folder_and_save_images(subtask.ans,self.task_name)
+                
+                # 保存图片并传输到MissionSocketService
+                create_folder_and_save_images_with_transmission(
+                    subtask.ans, 
+                    self.task_name, 
+                    self.task_name, 
+                    subtask.subtask_id
+                )
+                
                 if(len(ans_set[self.task_name])==100):
                     abs_path=os.getcwd()
                     task_info = {
@@ -332,6 +518,16 @@ class NodeWorker(threading.Thread):
                                     "next_node": ""
                                 }
                     print(task_info)
+                    
+                    # 发送任务完成信息到MissionSocketService
+                    try:
+                        send_task_completion_info(
+                            self.task_name, 
+                            subtask.subtask_id, 
+                            f"主任务完成，共处理{len(ans_set[self.task_name])}个子任务"
+                        )
+                    except Exception as e:
+                        print(f"发送主任务完成信息失败: {e}")
                 else:
                     task_info = {
                                     "type": "task_info",
