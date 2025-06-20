@@ -23,7 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="wwwroot\TaskImages\" />
+    <Folder Include="wwwroot\" />
   </ItemGroup>
 
 </Project>
