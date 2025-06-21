@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 import cv2
 import math
 import random
@@ -8,8 +6,8 @@ from threading import Thread
 import numpy as np
 import pickle
 import threading
-from typing import Dict, List, Tuple, Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List
+from concurrent.futures import ThreadPoolExecutor
 from cluster import *
 import os 
 import socket
@@ -18,9 +16,6 @@ import json
 import base64
 import configparser
 import time
-import queue
-import traceback
-from ultralytics import YOLO
 
 # 读取配置文件
 def load_config():
@@ -34,34 +29,11 @@ def load_config():
         # 创建默认配置文件
         config['DEFAULT'] = {
             'machine_ip': '192.168.31.35',
-            'ui_ip': '192.168.31.93', 
+            'ui_ip': '192.168.31.192', 
             'alg_ip': '192.168.31.35',
             'ui_port': '5009',
-            'mission_socket_ip': '192.168.31.93',
-            'mission_socket_port': '5009',
-            'max_retries': '3',
-            'connection_timeout': '30',
-            'read_timeout': '30',
-            'chunk_size': '4096',
-            'max_concurrent_uploads': '10',
-            'retry_delay_base': '1',
-            'retry_delay_max': '10',
-            'keep_alive': 'True',
-            'tcp_nodelay': 'True',
-            'connection_pool_size': '10',
-            'connection_pool_timeout': '30',
-            'connection_reuse_enabled': 'True',
-            'large_file_threshold': '102400',
-            'large_file_chunk_size': '4096',
-            'large_file_timeout': '30',
-            'tcp_keepalive_time': '7200',
-            'tcp_keepalive_interval': '90',
-            'tcp_keepalive_probes': '9',
-            'socket_buffer_size': '65536',
-            'debug_mode': 'True',
-            'log_level': 'INFO',
-            'enable_progress_logging': 'True',
-            'log_network_stats': 'True'
+            'mission_socket_ip': '192.168.27.93',
+            'mission_socket_port': '5009'
         }
         
         with open(config_file, 'w') as f:
@@ -81,309 +53,88 @@ UI_port = config.getint('DEFAULT', 'ui_port')
 MISSION_SOCKET_IP = config.get('DEFAULT', 'mission_socket_ip')
 MISSION_SOCKET_PORT = config.getint('DEFAULT', 'mission_socket_port')
 
-# 传输优化配置
-MAX_RETRIES = config.getint('DEFAULT', 'max_retries')
-CONNECTION_TIMEOUT = config.getint('DEFAULT', 'connection_timeout')
-READ_TIMEOUT = config.getint('DEFAULT', 'read_timeout')
-CHUNK_SIZE = config.getint('DEFAULT', 'chunk_size')
-MAX_CONCURRENT_UPLOADS = config.getint('DEFAULT', 'max_concurrent_uploads')
-RETRY_DELAY_BASE = config.getint('DEFAULT', 'retry_delay_base')
-RETRY_DELAY_MAX = config.getint('DEFAULT', 'retry_delay_max')
-KEEP_ALIVE = config.getboolean('DEFAULT', 'keep_alive')
-TCP_NODELAY = config.getboolean('DEFAULT', 'tcp_nodelay')
-
-# 连接池配置
-CONNECTION_POOL_SIZE = config.getint('DEFAULT', 'connection_pool_size')
-CONNECTION_POOL_TIMEOUT = config.getint('DEFAULT', 'connection_pool_timeout')
-CONNECTION_REUSE_ENABLED = config.getboolean('DEFAULT', 'connection_reuse_enabled')
-
-# 大文件传输配置
-LARGE_FILE_THRESHOLD = config.getint('DEFAULT', 'large_file_threshold')
-LARGE_FILE_CHUNK_SIZE = config.getint('DEFAULT', 'large_file_chunk_size')
-LARGE_FILE_TIMEOUT = config.getint('DEFAULT', 'large_file_timeout')
-
-# 网络优化配置
-TCP_KEEPALIVE_TIME = config.getint('DEFAULT', 'tcp_keepalive_time')
-TCP_KEEPALIVE_INTERVAL = config.getint('DEFAULT', 'tcp_keepalive_interval')
-TCP_KEEPALIVE_PROBES = config.getint('DEFAULT', 'tcp_keepalive_probes')
-SOCKET_BUFFER_SIZE = config.getint('DEFAULT', 'socket_buffer_size')
-
-# 调试配置
-DEBUG_MODE = config.getboolean('DEFAULT', 'debug_mode')
-LOG_LEVEL = config.get('DEFAULT', 'log_level')
-ENABLE_PROGRESS_LOGGING = config.getboolean('DEFAULT', 'enable_progress_logging')
-LOG_NETWORK_STATS = config.getboolean('DEFAULT', 'log_network_stats')
-
 print(f"图片传输服务配置: {MISSION_SOCKET_IP}:{MISSION_SOCKET_PORT}")
-print("图片传输协议: 使用优化的单张图片传输方式")
-print(f"传输优化: 超时={CONNECTION_TIMEOUT}s, 缓冲区={CHUNK_SIZE//1024}KB, 并发={MAX_CONCURRENT_UPLOADS}")
+print("图片传输协议: 使用带头消息的单张图片传输方式")
 
-ans_set: Dict = {}  # 存储每个任务的结果
+ans_set:Dict={}#存储每个任务的结果
 
-# 连接池管理
-class ConnectionPool:
-    def __init__(self, max_size=CONNECTION_POOL_SIZE):
-        self.max_size = max_size
-        self.pool = queue.Queue(maxsize=max_size)
-        self.active_connections = 0
-        self.lock = threading.Lock()
-        self.stats = {
-            'created': 0,
-            'reused': 0,
-            'closed': 0,
-            'errors': 0
-        }
-    
-    def get_connection(self) -> Optional[socket.socket]:
-        """获取连接"""
-        try:
-            # 尝试从池中获取可用连接
-            if CONNECTION_REUSE_ENABLED:
-                try:
-                    sock = self.pool.get_nowait()
-                    if self._is_connection_alive(sock):
-                        self.stats['reused'] += 1
-                        if DEBUG_MODE:
-                            print(f"🔄 复用连接，池中剩余: {self.pool.qsize()}")
-                        return sock
-                    else:
-                        sock.close()
-                        self.stats['closed'] += 1
-                except queue.Empty:
-                    pass
-            
-            # 创建新连接
-            sock = self._create_new_connection()
-            if sock:
-                with self.lock:
-                    self.active_connections += 1
-                    self.stats['created'] += 1
-                if DEBUG_MODE:
-                    print(f"🆕 创建新连接，活跃连接数: {self.active_connections}")
-            return sock
-            
-        except Exception as e:
-            self.stats['errors'] += 1
-            print(f"❌ 获取连接失败: {e}")
-            return None
-    
-    def return_connection(self, sock: socket.socket):
-        """归还连接到池"""
-        if not CONNECTION_REUSE_ENABLED or not self._is_connection_alive(sock):
-            sock.close()
-            with self.lock:
-                self.active_connections -= 1
-                self.stats['closed'] += 1
-            return
-        
-        try:
-            self.pool.put_nowait(sock)
-            if DEBUG_MODE:
-                print(f"🔙 连接归还到池，池大小: {self.pool.qsize()}")
-        except queue.Full:
-            sock.close()
-            with self.lock:
-                self.active_connections -= 1
-                self.stats['closed'] += 1
-    
-    def _create_new_connection(self) -> Optional[socket.socket]:
-        """创建新的TCP连接"""
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            
-            # 设置socket选项
-            if KEEP_ALIVE:
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-                # Linux特定的keepalive设置
-                if hasattr(socket, 'TCP_KEEPIDLE'):
-                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, TCP_KEEPALIVE_TIME)
-                if hasattr(socket, 'TCP_KEEPINTVL'):
-                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, TCP_KEEPALIVE_INTERVAL)
-                if hasattr(socket, 'TCP_KEEPCNT'):
-                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, TCP_KEEPALIVE_PROBES)
-            
-            if TCP_NODELAY:
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            
-            # 设置缓冲区大小
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUFFER_SIZE)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUFFER_SIZE)
-            
-            # 设置超时
-            sock.settimeout(CONNECTION_TIMEOUT)
-            sock.connect((MISSION_SOCKET_IP, MISSION_SOCKET_PORT))
-            
-            return sock
-            
-        except Exception as e:
-            print(f"❌ 创建连接失败: {e}")
-            return None
-    
-    def _is_connection_alive(self, sock: socket.socket) -> bool:
-        """检查连接是否有效"""
-        try:
-            # 发送0字节数据来检查连接状态
-            sock.send(b'', socket.MSG_DONTWAIT)
-            return True
-        except (socket.error, OSError):
-            return False
-    
-    def get_stats(self) -> dict:
-        """获取连接池统计信息"""
-        with self.lock:
-            return {
-                **self.stats,
-                'active_connections': self.active_connections,
-                'pool_size': self.pool.qsize()
-            }
-    
-    def close_all(self):
-        """关闭所有连接"""
-        while not self.pool.empty():
-            try:
-                sock = self.pool.get_nowait()
-                sock.close()
-                self.stats['closed'] += 1
-            except queue.Empty:
-                break
-        
-        with self.lock:
-            self.active_connections = 0
-
-# 全局连接池实例
-connection_pool = ConnectionPool()
-
-def calculate_retry_delay(attempt: int) -> float:
-    """计算指数退避延迟"""
-    delay = min(RETRY_DELAY_BASE ** attempt, RETRY_DELAY_MAX)
-    # 添加随机抖动，避免雷群效应
-    jitter = random.uniform(0.1, 0.3) * delay
-    return delay + jitter
-
-def send_images_to_mission_service(task_id: str, subtask_id: str, image_paths: List[str], max_retries: int = MAX_RETRIES) -> bool:
+def send_images_to_mission_service(task_id: str, subtask_id: str, image_paths: List[str], max_retries: int = 3):
     """
-    向 MissionSocketService 发送多张图片（优化版本）
+    向 MissionSocketService 发送多张图片
     :param task_id: 任务ID
     :param subtask_id: 子任务ID  
     :param image_paths: 图片文件路径列表
     :param max_retries: 最大重试次数
     """
-    if not image_paths:
-        print("⚠️ 图片路径列表为空")
-        return True
-    
-    print(f"🚀 开始发送 {len(image_paths)} 张图片到 MissionSocketService")
-    print(f"📋 任务信息: TaskId={task_id}, SubTask={subtask_id}")
-    
-    success_count = 0
-    total_bytes_sent = 0
-    start_time = time.time()
-    
-    # 使用线程池并发发送图片
-    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_UPLOADS) as executor:
-        # 提交所有图片发送任务
-        future_to_image = {
-            executor.submit(send_single_image_optimized, image_path, task_id, subtask_id, i + 1, len(image_paths), max_retries): 
-            (i + 1, image_path) for i, image_path in enumerate(image_paths)
-        }
-        
-        # 收集结果
-        for future in as_completed(future_to_image):
-            image_index, image_path = future_to_image[future]
-            try:
-                success, bytes_sent = future.result()
-                if success:
-                    success_count += 1
-                    total_bytes_sent += bytes_sent
-                    print(f"✅ 图片 {image_index}/{len(image_paths)} 发送成功: {os.path.basename(image_path)} ({bytes_sent} 字节)")
-                else:
-                    print(f"❌ 图片 {image_index}/{len(image_paths)} 发送失败: {os.path.basename(image_path)}")
-            except Exception as e:
-                print(f"❌ 图片 {image_index}/{len(image_paths)} 处理异常: {e}")
-    
-    # 统计信息
-    end_time = time.time()
-    duration = end_time - start_time
-    
-    print(f"\n📊 传输统计:")
-    print(f"   成功: {success_count}/{len(image_paths)} 张图片")
-    print(f"   总大小: {total_bytes_sent:,} 字节 ({total_bytes_sent/1024/1024:.2f} MB)")
-    print(f"   耗时: {duration:.2f} 秒")
-    if duration > 0:
-        print(f"   平均速度: {total_bytes_sent/duration/1024:.2f} KB/s")
-    
-    # 连接池统计
-    if LOG_NETWORK_STATS:
-        pool_stats = connection_pool.get_stats()
-        print(f"🔗 连接池统计: 创建={pool_stats['created']}, 复用={pool_stats['reused']}, 关闭={pool_stats['closed']}, 错误={pool_stats['errors']}")
-    
-    return success_count == len(image_paths)
-
-def send_single_image_optimized(image_path: str, task_id: str, subtask_id: str, image_index: int, total_images: int, max_retries: int = MAX_RETRIES) -> Tuple[bool, int]:
-    """
-    发送单张图片（优化版本）
-    """
-    if not os.path.exists(image_path):
-        print(f"❌ 图片文件不存在: {image_path}")
-        return False, 0
-    
-    file_size = os.path.getsize(image_path)
-    file_name = os.path.basename(image_path)
-    
-    # 根据文件大小选择不同的传输策略
-    is_large_file = file_size > LARGE_FILE_THRESHOLD
-    chunk_size = LARGE_FILE_CHUNK_SIZE if is_large_file else CHUNK_SIZE
-    timeout = LARGE_FILE_TIMEOUT if is_large_file else READ_TIMEOUT
-    
-    if DEBUG_MODE:
-        print(f"📤 准备发送图片: {file_name} ({file_size:,} 字节, {'大文件' if is_large_file else '普通文件'})")
-    
     for attempt in range(max_retries):
-        sock = None
         try:
-            # 从连接池获取连接
-            sock = connection_pool.get_connection()
-            if not sock:
-                raise Exception("无法获取有效连接")
+            # 建立TCP连接
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(30)  # 设置30秒超时
+            sock.connect((MISSION_SOCKET_IP, MISSION_SOCKET_PORT))
             
-            # 发送图片
-            bytes_sent = send_single_image_with_header_optimized(
-                sock, image_path, task_id, subtask_id, image_index, total_images, 
-                chunk_size, timeout, file_size
-            )
+            # 发送图片数据消息头
+            message_header = {
+                "type": "image_data",
+                "content": {
+                    "task_id": task_id,
+                    "subtask_name": subtask_id,
+                    "image_count": len(image_paths)
+                }
+            }
             
-            if bytes_sent == file_size:
-                # 成功发送，归还连接
-                connection_pool.return_connection(sock)
-                return True, bytes_sent
+            # 发送消息头
+            header_json = json.dumps(message_header)
+            sock.sendall(header_json.encode('utf-8'))
+            
+            # 发送每张图片
+            success_count = 0
+            for i, image_path in enumerate(image_paths):
+                if os.path.exists(image_path):
+                    try:
+                        # 使用带头消息的方式发送图片
+                        send_single_image_with_header(sock, image_path, task_id, subtask_id, i + 1, len(image_paths))
+                        success_count += 1
+                        print(f"已发送图片 {i+1}/{len(image_paths)}: {image_path}")
+                    except Exception as e:
+                        print(f"发送图片失败 {image_path}: {e}")
+                        break
+                else:
+                    print(f"图片文件不存在: {image_path}")
+            
+            if success_count == len(image_paths):
+                print(f"成功发送 {success_count} 张图片到 MissionSocketService")
+                sock.close()
+                return True
             else:
-                raise Exception(f"发送字节数不匹配: 期望={file_size}, 实际={bytes_sent}")
+                print(f"部分图片发送失败，成功: {success_count}/{len(image_paths)}")
                 
         except Exception as e:
-            if sock:
-                sock.close()  # 发生错误时关闭连接
-            
-            print(f"❌ 发送图片失败 {file_name} (尝试 {attempt + 1}/{max_retries}): {e}")
-            
+            print(f"发送图片到MissionSocketService失败 (尝试 {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
-                delay = calculate_retry_delay(attempt)
-                print(f"⏳ 等待 {delay:.1f} 秒后重试...")
-                time.sleep(delay)
-            else:
-                print(f"❌ 图片 {file_name} 发送失败，已重试 {max_retries} 次")
+                print(f"等待 {(attempt + 1) * 2} 秒后重试...")
+                time.sleep((attempt + 1) * 2)  # 递增延迟
+        finally:
+            try:
+                sock.close()
+            except:
+                pass
     
-    return False, 0
+    print(f"发送图片失败，已重试 {max_retries} 次")
+    return False
 
-def send_single_image_with_header_optimized(sock: socket.socket, image_path: str, task_id: str, subtask_id: str, 
-                                          image_index: int, total_images: int, chunk_size: int, timeout: int, file_size: int) -> int:
+def send_single_image_with_header(sock: socket.socket, image_path: str, task_id: str, subtask_id: str, image_index: int, total_images: int):
     """
-    发送带头消息的单张图片文件（优化版本）
+    发送带头消息的单张图片文件
+    :param sock: TCP socket连接
+    :param image_path: 图片文件路径
+    :param task_id: 任务ID
+    :param subtask_id: 子任务ID
+    :param image_index: 图片序号（从1开始）
+    :param total_images: 图片总数
     """
     try:
-        # 设置读取超时
-        sock.settimeout(timeout)
-        
-        # 构建并发送图片头消息
+        # 发送图片头消息
         image_header = {
             "type": "single_image",
             "content": {
@@ -392,46 +143,27 @@ def send_single_image_with_header_optimized(sock: socket.socket, image_path: str
                 "image_index": image_index,
                 "total_images": total_images,
                 "filename": os.path.basename(image_path),
-                "filesize": file_size
+                "filesize": os.path.getsize(image_path)
             }
         }
         
         # 发送JSON头消息
         header_json = json.dumps(image_header)
         sock.sendall(header_json.encode('utf-8'))
-        sock.sendall(b'\n')  # 分隔符
         
-        if DEBUG_MODE:
-            print(f"📤 已发送头消息: {len(header_json)} 字节")
+        # 发送分隔符（用于标识JSON结束）
+        sock.sendall(b'\n')
         
-        # 发送图片文件内容
-        bytes_sent = 0
-        last_progress_time = time.time()
-        progress_interval = 1.0  # 1秒更新一次进度
-        
+        # 直接发送图片文件内容（不包含Python的文件名长度等信息）
         with open(image_path, 'rb') as f:
-            while bytes_sent < file_size:
-                chunk = f.read(chunk_size)
+            while True:
+                chunk = f.read(4096)
                 if not chunk:
                     break
-                
                 sock.sendall(chunk)
-                bytes_sent += len(chunk)
-                
-                # 显示传输进度
-                if ENABLE_PROGRESS_LOGGING:
-                    current_time = time.time()
-                    if current_time - last_progress_time >= progress_interval or bytes_sent == file_size:
-                        progress = (bytes_sent / file_size) * 100
-                        speed = bytes_sent / (current_time - last_progress_time + 0.001) / 1024  # KB/s
-                        print(f"📊 传输进度: {progress:.1f}% ({bytes_sent:,}/{file_size:,} 字节, {speed:.1f} KB/s)")
-                        last_progress_time = current_time
-        
-        return bytes_sent
         
     except Exception as e:
-        print(f"❌ 发送带头消息的单张图片失败: {e}")
-        raise
+        print(f"发送带头消息的单张图片失败: {e}")
 
 def send_single_image(sock: socket.socket, image_path: str):
     """
@@ -492,15 +224,12 @@ def send_task_completion_info(task_id: str, subtask_id: str, result: str, max_re
             message_json = json.dumps(message)
             sock.sendall(message_json.encode('utf-8'))
             
-            # 添加换行符分隔符（与single_image协议保持一致）
-            sock.sendall(b'\n')
-            
-            print(f"✅ 已发送任务完成信息: {subtask_id} - {result}")
+            print(f"已发送任务完成信息: {subtask_id} - {result}")
             sock.close()
             return True
             
         except Exception as e:
-            print(f"❌ 发送任务完成信息失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+            print(f"发送任务完成信息失败 (尝试 {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
                 time.sleep(1)  # 等待1秒后重试
         finally:
@@ -509,7 +238,7 @@ def send_task_completion_info(task_id: str, subtask_id: str, result: str, max_re
             except:
                 pass
     
-    print(f"❌ 发送任务完成信息失败，已重试 {max_retries} 次")
+    print(f"发送任务完成信息失败，已重试 {max_retries} 次")
     return False
 
 def send_task_info_to_ui(task_info_client, task_info):
@@ -612,10 +341,6 @@ def split_video_into_segments(video_path, segment_count=100):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print(f"无法打开视频：{video_path}")
-        print(f"当前工作目录：{os.getcwd()}")
-        print(f"文件是否存在：{os.path.exists(video_path)}")
-        if os.path.exists(video_path):
-            print(f"文件大小：{os.path.getsize(video_path)} bytes")
         return []
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -1035,15 +760,6 @@ def deal_real_worker_message(client,info):
                 file=msg['content']
                 ptr=msg['next_node']#将任务名存在这里
                 ans_set[ptr]=[]
-                
-                # 确保使用完整路径
-                if not os.path.isabs(file):
-                    file = os.path.join(os.getcwd(), file)
-                
-                if not os.path.exists(file):
-                    print(f"视频文件不存在: {file}")
-                    continue
-                    
                 tasks_group_info=get_task_groups(file)
                 
                 # tasks_group_info=get_task_groups("test_objects.mp4")
@@ -1051,7 +767,7 @@ def deal_real_worker_message(client,info):
                                     "type": "Subtasks_info",
                                     "content": {},
                                     "next_node": ""
-                                }   
+                                }
                 tasks_set={}
                 t=TaskManager()
                 t.task_name=ptr
@@ -1070,31 +786,13 @@ def deal_real_worker_message(client,info):
 
 
                     #此处向负载均衡算法寻找分配方法
-                    try:
-                        ask_client=build_send_client(alg_ip,5008)
-                        ask_client.settimeout(10)  # 设置10秒超时
-                        ask_hr=message()
-                        ask_hr.type="ask"
-                        ask_hr.content=(name,dag,size_dag)
-                        data_to_send=pickle.dumps(ask_hr)
-                        send_to_server(ask_client,data_to_send)
-                        
-                        #此处接收负载均衡算法
-                        
-                        print(f"负载均衡算法响应成功，分配了 {len(dist_msg.content)} 个任务")
-                    except Exception as e:
-                        print(f"负载均衡算法连接失败: {e}")
-                        print("使用默认分配策略...")
-                        # 创建默认的任务分配
-                        dist_msg = message()
-                        dist_msg.content = []
-                        # 简单轮询分配给可用节点
-                        available_nodes = [f"192.168.31.35:{60000+i}" for i in range(30)]
-                        for i, task_name in enumerate(name):
-                            node_name = available_nodes[i % len(available_nodes)]
-                            dist_msg.content.append({"task": task_name, "ncp": node_name})
-                        print(f"默认分配策略完成，分配了 {len(dist_msg.content)} 个任务")
-                
+                    ask_client=build_send_client(alg_ip,5008)
+                    ask_hr=message()
+                    ask_hr.type="ask"
+                    ask_hr.content=(name,dag,size_dag)
+                    data_to_send=pickle.dumps(ask_hr)
+                    send_to_server(ask_client,data_to_send)
+                #此处接收负载均衡算法
                 works[ptr]=t
                 dist_data=recv_from_server(ask_client)
                 dist_msg:message=pickle.loads(dist_data)
@@ -1126,25 +824,18 @@ def deal_real_worker_message(client,info):
                         task_info["content"][key]=[i for i in node_task_info[key]]
                 
                 ####此处需要向前端发送任务处理的情况
-                print(f"准备发送 Subtasks_info，包含 {len(subtasks_info['content'])} 个组")
                 try:
-                    subtasks_json = json.dumps(subtasks_info)
-                    client.sendall(subtasks_json.encode(encoding="utf-8"))
-                    print("✅ Subtasks_info 发送成功")
-                    print(f"发送内容: {subtasks_info}")
+                    client.sendall(json.dumps(subtasks_info).encode(encoding="utf-8"))
+                    print("subtasks_info sended")
                 except Exception as e:
-                    print(f"❌ Subtasks_info 发送失败: {e}")
-                    print(f"消息内容: {subtasks_info}")
-                
-                print(f"准备发送 tasks_info，包含 {len(task_info['content'])} 个节点分配")
+                    print(subtasks_info)
+                    print(e)
                 try:
-                    task_info_json = json.dumps(task_info)
-                    client.sendall(task_info_json.encode(encoding="utf-8"))
-                    print("✅ tasks_info 发送成功")
-                    print(f"发送内容: {task_info}")
+                    client.sendall(json.dumps(task_info).encode(encoding="utf-8"))
+                    print("task_info sended")
                 except Exception as e:
-                    print(f"❌ tasks_info 发送失败: {e}")
-                    print(f"消息内容: {task_info}")    
+                    print(task_info)
+                    print(e)    
                 thread1=Thread(target=t.wait_all_done)
                 threads_main.append(thread1)
                 # t.wait_all_done()

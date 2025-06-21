@@ -440,7 +440,7 @@ namespace WebApplication_Drone.Controllers
 
                 var overview = new
                 {
-                    timestamp = DateTime.UtcNow,
+                    timestamp = DateTime.Now,
                     drones = new
                     {
                         total = drones.Count,

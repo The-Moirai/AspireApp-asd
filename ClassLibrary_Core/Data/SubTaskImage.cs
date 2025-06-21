@@ -10,7 +10,7 @@ namespace ClassLibrary_Core.Data
         /// <summary>
         /// 图片唯一标识符
         /// </summary>
-        public long Id { get; set; }
+        public Guid Id { get; set; }
 
         /// <summary>
         /// 所属子任务ID
@@ -50,7 +50,7 @@ namespace ClassLibrary_Core.Data
         /// <summary>
         /// 上传时间
         /// </summary>
-        public DateTime UploadTime { get; set; } = DateTime.UtcNow;
+        public DateTime UploadTime { get; set; } = DateTime.Now;
 
         /// <summary>
         /// 图片描述
@@ -63,7 +63,34 @@ namespace ClassLibrary_Core.Data
         /// <returns>图片访问URL</returns>
         public string GetImageUrl()
         {
-            return $"/api/images/subtask/{SubTaskId}/{Id}";
+            return $"/api/Tasks/images/{Id}/image";
+        }
+
+        /// <summary>
+        /// 生成图片查看URL（不触发下载）
+        /// </summary>
+        /// <returns>图片查看URL</returns>
+        public string GetViewUrl()
+        {
+            return $"/api/Tasks/images/{Id}/view";
+        }
+
+        /// <summary>
+        /// 生成图片下载URL（强制下载）
+        /// </summary>
+        /// <returns>图片下载URL</returns>
+        public string GetDownloadUrl()
+        {
+            return $"/api/Tasks/images/{Id}/image";
+        }
+
+        /// <summary>
+        /// 生成缩略图URL
+        /// </summary>
+        /// <returns>缩略图URL</returns>
+        public string GetThumbnailUrl()
+        {
+            return $"/api/Tasks/images/{Id}/thumbnail";
         }
 
         /// <summary>

@@ -25,16 +25,12 @@ AspireApp-asd/
 │   │   ├── Task_Manage.razor              # 智能任务管理系统（整合视频处理功能）
 
 │   ├── Controllers/
-│   │   ├── VideoAPIController.cs         # 视频API控制器
-│   │   └── ImageProcessingController.cs  # 图像处理控制器
+│   │   └── VideoAPIController.cs         # 视频API控制器
 │   ├── Service/
 
 │   └── appsettings.json                  # 配置文件
 ├── linux_code/
-│   ├── real_work.py                      # Python后端主文件
-│   ├── process_faces.py                  # 人脸识别处理
-│   ├── process_objects.py                # 物体检测处理
-│   └── process_mixed.py                  # 混合处理
+│   └── real_work.py                      # Python后端主文件
 └── README_Integration.md                 # 本文档
 ```
 
@@ -89,11 +85,9 @@ Web应用将在 `https://localhost:5001` 或 `http://localhost:5000` 启动。
 4. **实时监控**: 任务进度和状态实时更新
 5. **结果整合**: 将处理后的图片合成为视频
 
-### 🛠️ 支持的处理类型
+### 🛠️ 处理类型
 
-- **人脸识别** (`face`): 使用 `process_faces.py`
-- **物体检测** (`object`): 使用 `process_objects.py`  
-- **混合处理** (`mixed`): 使用 `process_mixed.py`
+- **视频任务处理**: 通过分布式集群处理视频任务
 
 ### 🖥️ 界面功能
 

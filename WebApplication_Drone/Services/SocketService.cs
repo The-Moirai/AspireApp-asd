@@ -68,7 +68,7 @@ namespace WebApplication_Drone.Services
                     _client = new TcpClient();
                     await _client.ConnectAsync(host, port);
                     _stream = _client.GetStream();
-                    Message_Send message = new Message_Send() { content = "30", type = "start_all" };
+                    Message_Send message = new Message_Send() { content = "50", type = "start_all" };
                     SendMessageAsync(message);
                     _currentRetry = 0; // 重置重试次数
                     _isReconnecting = false;
@@ -526,7 +526,7 @@ namespace WebApplication_Drone.Services
                             Id = Guid.NewGuid(),
                             Description = subTaskName,
                             Status = TaskStatus.WaitingForActivation,
-                            CreationTime = DateTime.UtcNow,
+                            CreationTime = DateTime.Now,
                             ParentTask = mainTask.Id,
                             ReassignmentCount = 0
                         };
@@ -627,7 +627,7 @@ namespace WebApplication_Drone.Services
         /// <param name="e"></param>
         private void OnDroneChanged(object? sender, DroneChangedEventArgs e)
         {
-            if (e.Action == "Delete" || e.Action == "Offline")
+            if (e.Action == "Delete")
             {
                 // 删除无人机或离线的处理逻辑
                 _logger.LogInformation($"Drone {e.Drone.Name} {e.Action}。");

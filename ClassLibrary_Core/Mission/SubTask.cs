@@ -56,33 +56,55 @@ namespace ClassLibrary_Core.Mission
         public List<SubTaskImage> Images { get; set; } = new List<SubTaskImage>();
 
         /// <summary>
-        /// 获取图片总数（包含文件路径和数据库存储的图片）
-        /// </summary>
-        public int GetTotalImageCount()
-        {
-            return (ImagePaths?.Count ?? 0) + (Images?.Count ?? 0);
-        }
-
-        /// <summary>
-        /// 获取所有图片的显示URL列表
+        /// 获取所有图片的显示URL列表（优先使用数据库图片API）
+        /// 如果内存中没有图片数据，返回空列表，前端应该调用API实时获取
         /// </summary>
         public List<string> GetAllImageUrls()
         {
             var urls = new List<string>();
             
-            // 添加文件路径（向后兼容）
-            if (ImagePaths?.Any() == true)
-            {
-                urls.AddRange(ImagePaths);
-            }
-            
-            // 添加数据库存储的图片URL
+            // 优先使用数据库存储的图片URL（通过API实时获取）
             if (Images?.Any() == true)
             {
                 urls.AddRange(Images.OrderBy(img => img.ImageIndex).Select(img => img.GetImageUrl()));
             }
+            // 如果内存中没有图片元数据，返回空列表，让前端通过API获取
+            // 前端应该调用: GET /api/Tasks/subtask/{subTaskId}/images
             
             return urls;
+        }
+
+        /// <summary>
+        /// 获取用于API调用的子任务图片列表URL
+        /// </summary>
+        public string GetImageListApiUrl()
+        {
+            return $"/api/Tasks/subtask/{Id}/images";
+        }
+
+        /// <summary>
+        /// 获取用于API调用的子任务图片数量URL
+        /// </summary>
+        public string GetImageCountApiUrl()
+        {
+            return $"/api/Tasks/subtask/{Id}/images-count";
+        }
+
+        /// <summary>
+        /// 获取图片总数（从数据库实时查询，不依赖内存缓存）
+        /// 注意：这个方法应该异步调用API来获取准确的图片数量
+        /// </summary>
+        public int GetTotalImageCount()
+        {
+            // 如果内存中有图片元数据，直接返回
+            if (Images?.Any() == true)
+            {
+                return Images.Count;
+            }
+            
+            // 否则返回0，让前端通过API获取准确数量
+            // 前端应该调用 /api/Tasks/subtask/{subTaskId}/images 来获取图片列表
+            return 0;
         }
     }
 }

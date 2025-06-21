@@ -7,12 +7,14 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using ClassLibrary_Core.Message;
+using ClassLibrary_Core.Data;
+
 
 namespace WebApplication_Drone.Services
 {
     public class MissionSocketService
     {
-        private readonly ManualResetEvent _stopEvent = new ManualResetEvent(false);//
+        private readonly ManualResetEvent _stopEvent = new ManualResetEvent(false);
         private TcpListener _listener;
         private readonly List<TcpClient> _clients = new();
         private readonly TaskDataService _taskDataService;
@@ -20,6 +22,25 @@ namespace WebApplication_Drone.Services
         private readonly SqlserverService _sqlserverService;
         private readonly ILogger<MissionSocketService> _logger;
         private readonly string _imageBasePath;
+
+        // 网络优化配置
+        private const int DefaultReceiveTimeout = 120000; // 120秒接收超时
+        private const int DefaultSendTimeout = 60000;     // 60秒发送超时
+        private const int LargeFileTimeout = 300000;      // 300秒大文件超时
+        private const int DefaultBufferSize = 65536;      // 64KB缓冲区
+        private const int LargeFileBufferSize = 131072;   // 128KB大文件缓冲区
+        private const long LargeFileThreshold = 1048576;  // 1MB大文件阈值
+        private const int MaxConcurrentClients = 50;      // 最大并发客户端
+        
+        // 连接统计
+        private volatile int _activeConnections = 0;
+        private long _totalBytesReceived = 0;
+        private long _totalImagesReceived = 0;
+
+        /// <summary>
+        /// 图片保存完成事件
+        /// </summary>
+        public static event EventHandler<ImageSavedEventArgs>? ImageSaved;
 
         public MissionSocketService(TaskDataService taskDataService, DroneDataService droneDataService, SqlserverService sqlserverService, ILogger<MissionSocketService> logger)
         {
@@ -30,22 +51,159 @@ namespace WebApplication_Drone.Services
             _imageBasePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "TaskImages");
             Directory.CreateDirectory(_imageBasePath);
         }
+
         /// <summary>
         /// 启动服务
         /// </summary>
         /// <param name="port">监听的端口号</param>
         public async Task StartAsync(int port)
         {
-            _listener = new TcpListener(IPAddress.Any, port);
-            _listener.Start();
-            _logger.LogInformation("MissionSocketService started on port {Port}", port);
+            try
+            {
+                _listener = new TcpListener(IPAddress.Any, port);
+                _listener.Start();
+                
+                // 设置服务器socket选项
+                _listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                _listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReceiveBuffer, DefaultBufferSize);
+                _listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.SendBuffer, DefaultBufferSize);
+                
+                _logger.LogInformation("🚀 MissionSocketService 已启动，端口: {Port}", port);
+                _logger.LogInformation("⚙️  网络配置: 接收超时={ReceiveTimeout}ms, 发送超时={SendTimeout}ms, 缓冲区={BufferSize}KB", 
+                    DefaultReceiveTimeout, DefaultSendTimeout, DefaultBufferSize / 1024);
 
+                // 启动监听任务，不阻塞当前线程
+                _ = Task.Run(async () => await AcceptClientsAsync());
+                
+                // 启动统计任务
+                _ = Task.Run(async () => await LogStatisticsAsync());
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ 启动 MissionSocketService 失败，端口: {Port}", port);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// 定期记录统计信息
+        /// </summary>
+        private async Task LogStatisticsAsync()
+        {
             while (!_stopEvent.WaitOne(0))
             {
-                var client = await _listener.AcceptTcpClientAsync();
-                _logger.LogInformation("Client connected");
-                _clients.Add(client);
-                _ = Task.Run(() => HandleClientAsync(client));
+                try
+                {
+                    await Task.Delay(30000); // 每30秒记录一次统计
+                    
+                    _logger.LogInformation("📊 连接统计: 活跃连接={ActiveConnections}, 总接收字节={TotalBytes:N0}, 总图片数={TotalImages}", 
+                        _activeConnections, _totalBytesReceived, _totalImagesReceived);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "记录统计信息失败");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 接受客户端连接的异步循环
+        /// </summary>
+        private async Task AcceptClientsAsync()
+        {
+            try
+            {
+                while (!_stopEvent.WaitOne(0))
+                {
+                    try
+                    {
+                        // 检查并发连接数限制
+                        if (_activeConnections >= MaxConcurrentClients)
+                        {
+                            _logger.LogWarning("⚠️  达到最大并发连接数限制: {MaxConnections}，等待连接释放", MaxConcurrentClients);
+                            await Task.Delay(1000);
+                            continue;
+                        }
+
+                        var client = await _listener.AcceptTcpClientAsync();
+                        Interlocked.Increment(ref _activeConnections);
+                        
+                        _logger.LogDebug("🔗 客户端连接: {RemoteEndPoint}, 活跃连接数: {ActiveConnections}", 
+                            client.Client.RemoteEndPoint, _activeConnections);
+                        
+                        lock (_clients)
+                        {
+                            _clients.Add(client);
+                        }
+                        
+                        // 为每个客户端启动独立的处理任务
+                        _ = Task.Run(async () => await HandleClientAsync(client));
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // 服务正在停止，忽略此异常
+                        _logger.LogDebug("TcpListener已释放，停止接受新连接");
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "❌ 接受客户端连接时发生错误");
+                        // 短暂延迟后继续监听
+                        await Task.Delay(1000);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ 客户端接受循环发生严重错误");
+            }
+            finally
+            {
+                _logger.LogInformation("客户端接受循环已停止");
+            }
+        }
+
+        /// <summary>
+        /// 配置客户端TCP选项
+        /// </summary>
+        private void ConfigureClientSocket(TcpClient client, long expectedFileSize = 0)
+        {
+            try
+            {
+                var socket = client.Client;
+                
+                // 根据文件大小选择超时和缓冲区配置
+                bool isLargeFile = expectedFileSize > LargeFileThreshold;
+                int receiveTimeout = isLargeFile ? LargeFileTimeout : DefaultReceiveTimeout;
+                int sendTimeout = DefaultSendTimeout;
+                int bufferSize = isLargeFile ? LargeFileBufferSize : DefaultBufferSize;
+                
+                // 设置超时
+                socket.ReceiveTimeout = receiveTimeout;
+                socket.SendTimeout = sendTimeout;
+                
+                // 设置缓冲区大小
+                socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReceiveBuffer, bufferSize);
+                socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.SendBuffer, bufferSize);
+                
+                // 设置TCP选项
+                socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, true);
+                socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+                
+                // Linux/Windows特定的keepalive设置
+                if (OperatingSystem.IsLinux())
+                {
+                    socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 60);
+                    socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 10);
+                    socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, 3);
+                }
+                
+                _logger.LogDebug("⚙️  客户端socket配置: 接收超时={ReceiveTimeout}ms, 缓冲区={BufferSize}KB, 大文件模式={IsLargeFile}", 
+                    receiveTimeout, bufferSize / 1024, isLargeFile);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "⚠️  配置客户端socket选项失败");
             }
         }
 
@@ -55,19 +213,25 @@ namespace WebApplication_Drone.Services
         /// <param name="client">客户端连接</param>
         private async Task HandleClientAsync(TcpClient client)
         {
-            var stream = client.GetStream();
+            var clientEndpoint = client.Client.RemoteEndPoint?.ToString() ?? "Unknown";
+            var connectionStartTime = DateTime.Now;
             
             try
             {
+                // 初始配置客户端socket
+                ConfigureClientSocket(client);
+                
+                var stream = client.GetStream();
+                
                 // 读取JSON消息头
-                var (jsonMessage, remainingData) = await ReadJsonMessageFromStream(stream);
+                var (jsonMessage, remainingData) = await ReadJsonMessageFromStreamAsync(stream);
                 if (string.IsNullOrEmpty(jsonMessage))
                 {
-                    _logger.LogDebug("未能读取到JSON消息头，连接可能已关闭");
+                    _logger.LogDebug("未能读取到JSON消息头，连接可能已关闭: {ClientEndpoint}", clientEndpoint);
                     return;
                 }
 
-                _logger.LogInformation("接收到JSON消息: {MessageJson}", jsonMessage);
+                _logger.LogDebug("📨 接收到JSON消息: {MessageJson}", jsonMessage);
                 
                 var options = new JsonSerializerOptions
                 {
@@ -78,25 +242,36 @@ namespace WebApplication_Drone.Services
                 var message = JsonSerializer.Deserialize<MessageFromNode>(jsonMessage, options);
                 if (message != null)
                 {
-                    _logger.LogInformation("成功解析消息类型: {Type}", message.type);
+                    _logger.LogInformation("✅ 成功解析消息类型: {Type} from {ClientEndpoint}", message.type, clientEndpoint);
                     
                     // 根据消息类型进行处理
                     switch (message.type)
                     {
                         case "single_image":
                             _logger.LogInformation("🖼️ 开始处理single_image消息，剩余数据: {RemainingBytes} 字节", remainingData?.Length ?? 0);
+                            
+                            // 根据文件大小重新配置socket
+                            if (message.content.ContainsKey("filesize") && 
+                                message.content["filesize"] is JsonElement fileSizeElement && 
+                                fileSizeElement.TryGetInt64(out long fileSize))
+                            {
+                                ConfigureClientSocket(client, fileSize);
+                            }
+                            
                             await ProcessSingleImageWithHeader(message, stream, remainingData);
                             break;
+                            
                         case "image_data":
                             _logger.LogInformation("📦 开始处理image_data消息，剩余数据: {RemainingBytes} 字节", remainingData?.Length ?? 0);
                             await ProcessImageDataDirect(message, stream, remainingData);
-                            // image_data是旧协议，现在已废弃，处理完后关闭连接
                             break;
+                            
                         case "task_info":
                         case "task_result":
                             _logger.LogInformation("📋 处理任务消息: {Type}", message.type);
                             await ProcessMessage(message, stream);
                             break;
+                            
                         default:
                             _logger.LogWarning("❓ 未知消息类型: {Type}", message.type);
                             await ProcessMessage(message, stream);
@@ -108,101 +283,95 @@ namespace WebApplication_Drone.Services
                     _logger.LogError("❌ JSON消息解析失败，message为null: {JsonMessage}", jsonMessage);
                 }
             }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
+            {
+                _logger.LogWarning("⏰ 客户端连接超时: {ClientEndpoint}, 连接时长: {Duration:F1}秒", 
+                    clientEndpoint, (DateTime.Now - connectionStartTime).TotalSeconds);
+            }
             catch (JsonException ex)
             {
-                _logger.LogError(ex, "JSON解析失败");
+                _logger.LogError(ex, "❌ JSON解析失败: {ClientEndpoint}", clientEndpoint);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error handling client: {Message}", ex.Message);
+                _logger.LogError(ex, "❌ 处理客户端连接错误: {ClientEndpoint}, 消息: {Message}", clientEndpoint, ex.Message);
             }
             finally
             {
-                _clients.Remove(client);
-                client.Close();
-                _logger.LogInformation("Client disconnected");
+                // 清理客户端连接
+                lock (_clients)
+                {
+                    _clients.Remove(client);
+                }
+                
+                try
+                {
+                    client.Close();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "关闭客户端连接时发生错误");
+                }
+                
+                Interlocked.Decrement(ref _activeConnections);
+                
+                var connectionDuration = (DateTime.Now - connectionStartTime).TotalSeconds;
+                _logger.LogDebug("🔌 客户端断开: {ClientEndpoint}, 连接时长: {Duration:F1}秒, 剩余活跃连接: {ActiveConnections}", 
+                    clientEndpoint, connectionDuration, _activeConnections);
             }
         }
 
         /// <summary>
-        /// 从流中读取JSON消息，返回JSON消息和剩余的二进制数据
+        /// 从流中读取JSON消息，返回JSON消息和剩余的二进制数据（异步版本）
         /// </summary>
-        private async Task<(string jsonMessage, byte[] remainingData)> ReadJsonMessageFromStream(NetworkStream stream)
+        private async Task<(string jsonMessage, byte[] remainingData)> ReadJsonMessageFromStreamAsync(NetworkStream stream)
         {
-            var buffer = new byte[4096];
+            var buffer = new byte[DefaultBufferSize];
             var jsonBuffer = new List<byte>();
+            var cancellationTokenSource = new CancellationTokenSource(DefaultReceiveTimeout);
             
-            _logger.LogDebug("开始读取JSON消息...");
+            _logger.LogDebug("📖 开始读取JSON消息...");
             
-            while (true)
+            try
             {
-                var bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
-                if (bytesRead == 0)
+                while (!cancellationTokenSource.Token.IsCancellationRequested)
                 {
-                    _logger.LogDebug("流读取结束，总字节: {TotalBytes}", jsonBuffer.Count);
-                    break; // 连接关闭
-                }
+                    var bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, cancellationTokenSource.Token);
+                    if (bytesRead == 0)
+                    {
+                        _logger.LogDebug("流读取结束，总字节: {TotalBytes}", jsonBuffer.Count);
+                        break; // 连接关闭
+                    }
 
-                _logger.LogDebug("读取到 {BytesRead} 字节，累积 {TotalBytes} 字节", bytesRead, jsonBuffer.Count + bytesRead);
-                jsonBuffer.AddRange(buffer.Take(bytesRead));
-                
-                // 尝试解析JSON
-                if (TryParseJsonFromBuffer(jsonBuffer, out var jsonMessage, out int bytesConsumed))
-                {
-                    _logger.LogDebug("成功解析JSON，消耗 {BytesConsumed} 字节", bytesConsumed);
+                    _logger.LogDebug("📖 读取到 {BytesRead} 字节，累积 {TotalBytes} 字节", bytesRead, jsonBuffer.Count + bytesRead);
+                    jsonBuffer.AddRange(buffer.Take(bytesRead));
                     
-                    // 跳过JSON内容
-                    int totalConsumed = bytesConsumed;
-                    
-                    // 跳过换行符分隔符（如果存在）
-                    if (totalConsumed < jsonBuffer.Count && jsonBuffer[totalConsumed] == (byte)'\n')
+                    // 尝试解析JSON
+                    if (TryParseJsonFromBuffer(jsonBuffer, out var jsonMessage, out int bytesConsumed))
                     {
-                        totalConsumed++; // 跳过换行符
-                        _logger.LogDebug("跳过JSON后的换行符分隔符");
+                        // 计算剩余的二进制数据
+                        var remainingData = jsonBuffer.Skip(bytesConsumed).ToArray();
+                        
+                        _logger.LogDebug("✅ JSON解析成功，消息长度: {JsonLength}, 剩余数据: {RemainingBytes} 字节", 
+                            jsonMessage.Length, remainingData.Length);
+                        
+                        return (jsonMessage, remainingData);
                     }
                     
-                    // 返回JSON消息和剩余的二进制数据
-                    var remainingData = jsonBuffer.Skip(totalConsumed).ToArray();
-                    if (remainingData.Length > 0)
+                    // 防止缓冲区过大
+                    if (jsonBuffer.Count > 1024 * 1024) // 1MB限制
                     {
-                        _logger.LogDebug("JSON解析后还有 {RemainingBytes} 字节剩余数据", remainingData.Length);
+                        throw new InvalidDataException("JSON消息过大，超过1MB限制");
                     }
-                    
-                    return (jsonMessage, remainingData);
-                }
-                
-                // 如果累积的数据太多仍然无法解析JSON，可能是协议错误
-                if (jsonBuffer.Count > 10000) // 10KB限制
-                {
-                    _logger.LogError("JSON消息过大或格式错误，累积字节: {BufferSize}", jsonBuffer.Count);
-                    
-                    // 查找是否有换行符
-                    int newlinePos = -1;
-                    for (int i = 0; i < Math.Min(jsonBuffer.Count, 1000); i++)
-                    {
-                        if (jsonBuffer[i] == (byte)'\n')
-                        {
-                            newlinePos = i;
-                            break;
-                        }
-                    }
-                    
-                    if (newlinePos >= 0)
-                    {
-                        _logger.LogError("发现换行符在位置 {NewlinePos}，但JSON解析失败。前100字符: {Content}", 
-                            newlinePos, Encoding.UTF8.GetString(jsonBuffer.Take(Math.Min(100, newlinePos)).ToArray()));
-                    }
-                    else
-                    {
-                        _logger.LogError("未找到换行符分隔符，前500字符: {Content}", 
-                            Encoding.UTF8.GetString(jsonBuffer.Take(500).ToArray()));
-                    }
-                    
-                    break;
                 }
             }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("⏰ 读取JSON消息超时");
+                throw new TimeoutException("读取JSON消息超时");
+            }
             
-            return (string.Empty, new byte[0]);
+            return (string.Empty, Array.Empty<byte>());
         }
 
         /// <summary>
@@ -458,7 +627,7 @@ namespace WebApplication_Drone.Services
                         // 保存图片到数据库和文件系统
                         var (imagePath, imageId) = await SaveImageToDatabase(stream, taskId, subtaskName, imageIndex, fileName, fileSize, remainingData);
                         
-                        if (!string.IsNullOrEmpty(imagePath) || imageId > 0)
+                        if (!string.IsNullOrEmpty(imagePath) || imageId != Guid.Empty)
                         {
                             // 更新任务数据，添加图片路径（向后兼容）
                             Guid taskGuid;
@@ -473,8 +642,12 @@ namespace WebApplication_Drone.Services
                                 _taskDataService.UpdateSubTaskImage(taskGuid, subtaskName, imagePath);
                             }
                             
-                            _logger.LogInformation("✅ 单张图片接收成功: TaskId={TaskId}, SubTask={SubTask}, ImagePath={ImagePath}, ImageId={ImageId}, 序号={ImageIndex}/{TotalImages}", 
-                                taskId, subtaskName, imagePath, imageId, imageIndex, totalImages);
+                            // 更新统计信息
+                            Interlocked.Increment(ref _totalImagesReceived);
+                            Interlocked.Add(ref _totalBytesReceived, fileSize);
+                            
+                            _logger.LogInformation("✅ 单张图片接收成功: TaskId={TaskId}, SubTask={SubTask}, ImagePath={ImagePath}, ImageId={ImageId}, 序号={ImageIndex}/{TotalImages}, 大小={FileSize:N0}字节", 
+                                taskId, subtaskName, imagePath, imageId, imageIndex, totalImages, fileSize);
                         }
                         else
                         {
@@ -650,7 +823,7 @@ namespace WebApplication_Drone.Services
         /// <summary>
         /// 保存图片到数据库和文件系统
         /// </summary>
-        private async Task<(string imagePath, long imageId)> SaveImageToDatabase(NetworkStream stream, string taskId, string subtaskName, int imageIndex, string fileName, long fileSize, byte[] preloadedData = null)
+        private async Task<(string imagePath, Guid imageId)> SaveImageToDatabase(NetworkStream stream, string taskId, string subtaskName, int imageIndex, string fileName, long fileSize, byte[] preloadedData = null)
         {
             try
             {
@@ -748,24 +921,8 @@ namespace WebApplication_Drone.Services
                             _logger.LogError(ex, "保存图片到文件系统失败");
                         }
                         
-                        return (imagePath, 0); // 返回文件路径但数据库ID为0
+                        return (imagePath, Guid.Empty); // 返回文件路径但数据库ID为空
                     }
-                }
-
-                // 保存图片到数据库
-                long imageId = 0;
-                try
-                {
-                    imageId = await _sqlserverService.SaveSubTaskImageAsync(subTaskId, imageData, fileName, imageIndex, $"子任务 {subtaskName} 的处理结果图片");
-                    _logger.LogInformation("图片保存到数据库成功: SubTaskId={SubTaskId}, ImageId={ImageId}, FileName={FileName}, Size={Size}字节", 
-                        subTaskId, imageId, fileName, imageData.Length);
-                    
-                    // 同步更新TaskDataService中的SubTask.Images集合
-                    await SyncImageToTaskDataService(taskGuid, subTaskId, imageId, fileName, imageIndex, imageData.Length);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "保存图片到数据库失败，将使用文件系统备份方案");
                 }
 
                 // 同时保存到文件系统作为备份（向后兼容）
@@ -779,6 +936,35 @@ namespace WebApplication_Drone.Services
                     _logger.LogError(ex, "保存图片到文件系统失败");
                 }
 
+                // 保存图片到数据库
+                Guid imageId = Guid.Empty;
+                try
+                {
+                    imageId = await _sqlserverService.SaveSubTaskImageAsync(subTaskId, imageData, fileName, imageIndex, $"子任务 {subtaskName} 的处理结果图片");
+                    _logger.LogInformation("图片保存到数据库成功: SubTaskId={SubTaskId}, ImageId={ImageId}, FileName={FileName}, Size={Size}字节", 
+                        subTaskId, imageId, fileName, imageData.Length);
+                    
+                    // 同步更新TaskDataService中的SubTask.Images集合
+                    await SyncImageToTaskDataService(taskGuid, subTaskId, imageId, fileName, imageIndex, imageData.Length);
+                    
+                    // 🔥 触发图片保存事件，供其他服务监听
+                    ImageSaved?.Invoke(this, new ImageSavedEventArgs
+                    {
+                        TaskId = taskGuid,
+                        SubTaskId = subTaskId,
+                        ImageId = imageId,
+                        FileName = fileName,
+                        ImageIndex = imageIndex,
+                        FileSize = imageData.Length,
+                        SavedAt = DateTime.Now,
+                        WebPath = imagePathFinal,
+                        SubTaskName = subtaskName
+                    });
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "保存图片到数据库失败，将使用文件系统备份方案");
+                }
                 return (imagePathFinal, imageId);
             }
             catch (Exception ex)
@@ -789,58 +975,81 @@ namespace WebApplication_Drone.Services
         }
 
         /// <summary>
-        /// 同步图片信息到TaskDataService中的SubTask.Images集合
+        /// 同步图片元数据到TaskDataService中的SubTask.Images集合（不包含二进制数据）
         /// </summary>
-        private async Task SyncImageToTaskDataService(Guid taskGuid, Guid subTaskId, long imageId, string fileName, int imageIndex, long fileSize)
+        private async Task SyncImageToTaskDataService(Guid taskGuid, Guid subTaskId, Guid imageId, string fileName, int imageIndex, long fileSize)
         {
             try
             {
-                // 从数据库获取完整的图片信息
-                var imageData = await _sqlserverService.GetSubTaskImageAsync(imageId);
-                if (imageData != null)
+                // 创建轻量级图片元数据对象，不从数据库加载二进制数据
+                var imageMetadata = new SubTaskImage
                 {
-                    // 直接更新TaskDataService中的任务数据
-                    var mainTask = _taskDataService.GetTask(taskGuid);
-                    if (mainTask != null)
+                    Id = imageId,
+                    SubTaskId = subTaskId,
+                    ImageData = null, // 不加载二进制数据，节省内存
+                    FileName = fileName,
+                    FileExtension = Path.GetExtension(fileName),
+                    FileSize = fileSize,
+                    ContentType = GetContentTypeByExtension(Path.GetExtension(fileName)),
+                    ImageIndex = imageIndex,
+                    UploadTime = DateTime.Now,
+                    Description = $"子任务 {subTaskId} 的处理结果图片"
+                };
+
+                // 直接更新TaskDataService中的任务数据
+                var mainTask = _taskDataService.GetTask(taskGuid);
+                if (mainTask != null)
+                {
+                    var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
+                    if (subTask != null)
                     {
-                        var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
-                        if (subTask != null)
+                        // 检查是否已存在相同的图片
+                        if (!subTask.Images.Any(img => img.Id == imageId))
                         {
-                            // 检查是否已存在相同的图片
-                            if (!subTask.Images.Any(img => img.Id == imageId))
-                            {
-                                subTask.Images.Add(imageData);
-                                
-                                // 按图片序号排序
-                                subTask.Images = subTask.Images.OrderBy(img => img.ImageIndex).ThenBy(img => img.UploadTime).ToList();
-                                
-                                _logger.LogDebug("✅ 同步图片到TaskDataService成功: SubTaskId={SubTaskId}, ImageId={ImageId}, FileName={FileName}", 
-                                    subTaskId, imageId, fileName);
-                            }
-                            else
-                            {
-                                _logger.LogDebug("图片已存在，跳过同步: ImageId={ImageId}", imageId);
-                            }
+                            subTask.Images.Add(imageMetadata);
+                            
+                            // 按图片序号排序
+                            subTask.Images = subTask.Images.OrderBy(img => img.ImageIndex).ThenBy(img => img.UploadTime).ToList();
+                            
+                            _logger.LogDebug("✅ 同步图片元数据到TaskDataService成功: SubTaskId={SubTaskId}, ImageId={ImageId}, FileName={FileName}", 
+                                subTaskId, imageId, fileName);
                         }
                         else
                         {
-                            _logger.LogWarning("⚠️ 未找到子任务进行图片同步: SubTaskId={SubTaskId}", subTaskId);
+                            _logger.LogDebug("图片元数据已存在，跳过同步: ImageId={ImageId}", imageId);
                         }
                     }
                     else
                     {
-                        _logger.LogWarning("⚠️ 未找到任务进行图片同步: TaskId={TaskId}", taskGuid);
+                        _logger.LogWarning("⚠️ 未找到子任务进行图片同步: SubTaskId={SubTaskId}", subTaskId);
                     }
                 }
                 else
                 {
-                    _logger.LogWarning("❌ 无法从数据库获取图片数据进行同步: ImageId={ImageId}", imageId);
+                    _logger.LogWarning("⚠️ 未找到任务进行图片同步: TaskId={TaskId}", taskGuid);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "❌ 同步图片到TaskDataService失败: ImageId={ImageId}", imageId);
+                _logger.LogError(ex, "❌ 同步图片元数据到TaskDataService失败: ImageId={ImageId}", imageId);
             }
+        }
+
+        /// <summary>
+        /// 根据文件扩展名获取MIME类型
+        /// </summary>
+        private static string GetContentTypeByExtension(string fileExtension)
+        {
+            return fileExtension.ToLowerInvariant() switch
+            {
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".gif" => "image/gif",
+                ".bmp" => "image/bmp",
+                ".webp" => "image/webp",
+                ".svg" => "image/svg+xml",
+                _ => "image/png" // 默认为PNG
+            };
         }
 
         /// <summary>
@@ -975,14 +1184,45 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public void Stop()
         {
-            _stopEvent.Set(); // 触发循环退出
-            foreach (var client in _clients)
+            try
             {
-                client.Close();
+                _logger.LogInformation("正在停止 MissionSocketService...");
+                
+                _stopEvent.Set(); // 触发循环退出
+                
+                // 关闭所有客户端连接
+                lock (_clients)
+                {
+                    foreach (var client in _clients.ToList())
+                    {
+                        try
+                        {
+                            client?.Close();
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "关闭客户端连接时发生错误");
+                        }
+                    }
+                    _clients.Clear();
+                }
+                
+                // 停止监听器
+                try
+                {
+                    _listener?.Stop();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "停止监听器时发生错误");
+                }
+                
+                _logger.LogInformation("MissionSocketService 已停止");
             }
-            _clients.Clear();
-            _listener?.Stop();
-            _logger.LogInformation("MissionSocketService stopped");
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "停止 MissionSocketService 时发生错误");
+            }
         }
     }
 }

@@ -4,6 +4,7 @@ using ClassLibrary_Core.Mission;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using System.Threading.Tasks;
+using System.Collections.Concurrent;
 
 namespace WebApplication_Drone.Services
 {
@@ -249,7 +250,7 @@ namespace WebApplication_Drone.Services
 
                 subTask.AssignedDrone = droneName;
                 subTask.Status = TaskStatus.Running;
-                subTask.AssignedTime = DateTime.UtcNow;
+                subTask.AssignedTime = DateTime.Now;
                 subTask.ReassignmentCount++;
 
                 // 异步同步到数据库 - 创建快照避免集合修改异常
@@ -284,7 +285,7 @@ namespace WebApplication_Drone.Services
 
                 subTask.AssignedDrone = droneName;
                 subTask.Status = TaskStatus.Running;
-                subTask.AssignedTime = DateTime.UtcNow;
+                subTask.AssignedTime = DateTime.Now;
 
                 // 异步同步到数据库 - 创建快照避免集合修改异常
                 var subTaskSnapshot = CloneSubTask(subTask);
@@ -320,8 +321,11 @@ namespace WebApplication_Drone.Services
                     if (subTask != null && subTask.Status != System.Threading.Tasks.TaskStatus.RanToCompletion)
                     {
                         subTask.Status = System.Threading.Tasks.TaskStatus.RanToCompletion;
-                        subTask.CompletedTime = DateTime.Now;
+                        subTask.CompletedTime = DateTime.Now; // 使用当地时间保持一致性
                         OnDroneChanged("SubTaskCompleted", task);
+                        
+                        _logger.LogInformation("子任务完成: TaskId={TaskId}, SubTask={SubTaskDescription}, CompletedTime={CompletedTime}", 
+                            mainTaskId, subTaskDescription, subTask.CompletedTime);
 
                         // 异步同步到数据库
                         var taskSnapshot = CloneTask(task);
@@ -378,8 +382,8 @@ namespace WebApplication_Drone.Services
                 if (mainTask != null)
                 {
                     subTask.ParentTask = mainTaskId; // 确保设置父任务ID
-                    subTask.CreationTime = DateTime.UtcNow; // 确保设置创建时间
-                    subTask.AssignedTime = DateTime.UtcNow;
+                    subTask.CreationTime = DateTime.Now; // 确保设置创建时间
+                    subTask.AssignedTime = DateTime.Now;
 
                     mainTask.SubTasks.Add(subTask);
 
@@ -465,34 +469,157 @@ namespace WebApplication_Drone.Services
             }
         }
         /// <summary>
-        /// 从数据库加载所有主任务
+        /// 从数据库加载所有主任务（优化版本）
         /// </summary>
         public async Task LoadTasksFromDatabaseAsync()
         {
             try
             {
-                var dbTasks = await _sqlserverService.GetAllMainTasksAsync();
+                _logger.LogInformation("开始从数据库加载任务数据...");
                 
-                // 为每个主任务加载子任务
-                foreach (var dbTask in dbTasks)
+                var dbTasks = await _sqlserverService.GetAllMainTasksAsync();
+                _logger.LogInformation("加载了 {MainTaskCount} 个主任务", dbTasks.Count);
+                
+                if (!dbTasks.Any())
                 {
-                    var subTasks = await _sqlserverService.GetSubTasksByParentAsync(dbTask.Id);
-                    dbTask.SubTasks.AddRange(subTasks);
+                    _logger.LogInformation("数据库中未找到任务数据");
+                    return;
                 }
 
+                // 并行加载子任务和图片数据
+                await LoadTasksDataInParallel(dbTasks);
+
+                // 原子性更新内存数据
                 lock (_lock)
                 {
                     _tasks.Clear();
                     _tasks.AddRange(dbTasks);
                 }
                 
-                // 加载子任务的图片数据
-                await LoadSubTaskImagesFromDatabaseAsync();
+                _logger.LogInformation("任务数据加载完成，总计 {MainTaskCount} 个主任务，{SubTaskCount} 个子任务", 
+                    dbTasks.Count, dbTasks.Sum(t => t.SubTasks.Count));
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "从数据库加载任务错误: {Message}", ex.Message);
+                throw;
             }
+        }
+
+        /// <summary>
+        /// 分批从数据库加载任务数据（大数据量优化）
+        /// </summary>
+        /// <param name="batchSize">批次大小</param>
+        /// <param name="maxConcurrency">最大并发数</param>
+        public async Task LoadTasksFromDatabaseBatchAsync(int batchSize = 50, int maxConcurrency = 5)
+        {
+            try
+            {
+                _logger.LogInformation("开始分批从数据库加载任务数据，批次大小: {BatchSize}", batchSize);
+                
+                var totalTasks = await _sqlserverService.GetMainTaskCountAsync();
+                var batchCount = (int)Math.Ceiling((double)totalTasks / batchSize);
+                
+                _logger.LogInformation("总主任务数: {TotalTasks}, 分批数: {BatchCount}", totalTasks, batchCount);
+                
+                var semaphore = new SemaphoreSlim(maxConcurrency);
+                var allTasks = new ConcurrentBag<MainTask>();
+                var loadTasks = new List<Task>();
+                
+                for (int batch = 0; batch < batchCount; batch++)
+                {
+                    var currentBatch = batch;
+                    var task = Task.Run(async () =>
+                    {
+                        await semaphore.WaitAsync();
+                        try
+                        {
+                            var tasks = await _sqlserverService.GetMainTasksByPageAsync(currentBatch, batchSize);
+                            
+                            // 并行加载每个任务的子任务和图片
+                            await LoadTasksDataInParallel(tasks);
+                            
+                            foreach (var t in tasks)
+                            {
+                                allTasks.Add(t);
+                            }
+                            
+                            _logger.LogDebug("完成第 {Batch}/{TotalBatches} 批次，{TaskCount} 个任务", 
+                                currentBatch + 1, batchCount, tasks.Count);
+                        }
+                        finally
+                        {
+                            semaphore.Release();
+                        }
+                    });
+                    
+                    loadTasks.Add(task);
+                }
+                
+                await Task.WhenAll(loadTasks);
+                
+                // 原子性更新内存数据
+                lock (_lock)
+                {
+                    _tasks.Clear();
+                    _tasks.AddRange(allTasks);
+                }
+                
+                _logger.LogInformation("分批加载完成，总计 {MainTaskCount} 个主任务，{SubTaskCount} 个子任务", 
+                    allTasks.Count, allTasks.Sum(t => t.SubTasks.Count));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "分批加载任务数据失败: {Message}", ex.Message);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// 并行加载任务的子数据
+        /// </summary>
+        public async Task LoadTasksDataInParallel(List<MainTask> tasks)
+        {
+            var loadTasks = tasks.Select(async task =>
+            {
+                try
+                {
+                    // 并行加载子任务和图片
+                    var subTasksTask = _sqlserverService.GetSubTasksByParentAsync(task.Id);
+                    
+                    var subTasks = await subTasksTask;
+                    task.SubTasks.AddRange(subTasks);
+                    
+                                         // 并行加载图片元数据（不加载二进制数据）
+                     if (subTasks.Any())
+                     {
+                         var imageLoadTasks = subTasks.Select(async subTask =>
+                         {
+                             try
+                             {
+                                 // 只加载图片的基本信息，不加载ImageData二进制数据
+                                 var imageMetadata = await _sqlserverService.GetSubTaskImageMetadataAsync(subTask.Id);
+                                 subTask.Images = imageMetadata;
+                                 
+                                 _logger.LogDebug("为子任务 {SubTaskId} 加载了 {ImageCount} 条图片元数据", 
+                                     subTask.Id, imageMetadata.Count);
+                             }
+                             catch (Exception ex)
+                             {
+                                 _logger.LogWarning(ex, "加载子任务图片元数据失败: SubTaskId={SubTaskId}", subTask.Id);
+                             }
+                         });
+                         
+                         await Task.WhenAll(imageLoadTasks);
+                     }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "加载任务数据失败: TaskId={TaskId}", task.Id);
+                }
+            });
+            
+            await Task.WhenAll(loadTasks);
         }
         /// <summary>
         /// 同步所有任务到数据库
@@ -650,7 +777,7 @@ namespace WebApplication_Drone.Services
                             subTask.Status = newStatus;
                             if (newStatus == TaskStatus.RanToCompletion || newStatus == TaskStatus.Faulted)
                             {
-                                subTask.CompletedTime = DateTime.UtcNow;
+                                subTask.CompletedTime = DateTime.Now;
                             }
                             updatedCount++;
                             
@@ -680,7 +807,7 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public List<SubTask> GetExpiredSubTasks(TimeSpan timeout)
         {
-            var cutoffTime = DateTime.UtcNow - timeout;
+            var cutoffTime = DateTime.Now - timeout;
             
             lock (_lock)
             {
@@ -747,7 +874,7 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public async Task<int> CleanupOldCompletedTasksAsync(TimeSpan maxAge)
         {
-            var cutoffTime = DateTime.UtcNow - maxAge;
+            var cutoffTime = DateTime.Now - maxAge;
             var cleanedCount = 0;
             
             lock (_lock)
@@ -916,46 +1043,102 @@ namespace WebApplication_Drone.Services
 
 
         /// <summary>
-        /// 为所有子任务加载数据库中的图片
+        /// 为所有子任务加载图片元数据（不包含二进制数据）
         /// </summary>
-        public async Task LoadSubTaskImagesFromDatabaseAsync()
+        public async Task LoadSubTaskImageMetadataFromDatabaseAsync()
         {
             try
             {
-                _logger.LogInformation("开始从数据库加载子任务图片...");
+                _logger.LogInformation("开始从数据库加载子任务图片元数据...");
                 
-                lock (_lock)
-                {
-                    foreach (var task in _tasks)
-                    {
-                        _ = Task.Run(async () =>
+                var tasks = GetTasks(); // 获取任务快照，避免长时间锁定
+                
+                var loadTasks = tasks.Select(async task =>
                         {
-                            foreach (var subTask in task.SubTasks)
+                    var subTaskLoadTasks = task.SubTasks.Select(async subTask =>
                             {
                                 try
                                 {
-                                    var images = await _sqlserverService.GetSubTaskImagesAsync(subTask.Id);
-                                    if (images.Any())
+                            // 只加载图片元数据，不加载二进制数据
+                            var imageMetadata = await _sqlserverService.GetSubTaskImageMetadataAsync(subTask.Id);
+                            if (imageMetadata.Any())
                                     {
-                                        subTask.Images = images;
-                                        _logger.LogDebug("为子任务 {SubTaskId} 加载了 {ImageCount} 张图片", 
-                                            subTask.Id, images.Count);
+                                subTask.Images = imageMetadata;
+                                _logger.LogDebug("为子任务 {SubTaskId} 加载了 {ImageCount} 条图片元数据", 
+                                    subTask.Id, imageMetadata.Count);
                                     }
                                 }
                                 catch (Exception ex)
                                 {
-                                    _logger.LogError(ex, "加载子任务图片失败: SubTaskId={SubTaskId}", subTask.Id);
+                            _logger.LogError(ex, "加载子任务图片元数据失败: SubTaskId={SubTaskId}", subTask.Id);
                                 }
-                            }
-                        });
-                    }
-                }
+                    });
+                    
+                    await Task.WhenAll(subTaskLoadTasks);
+                });
                 
-                _logger.LogInformation("子任务图片加载完成");
+                await Task.WhenAll(loadTasks);
+                
+                _logger.LogInformation("子任务图片元数据加载完成");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "从数据库加载子任务图片失败");
+                _logger.LogError(ex, "从数据库加载子任务图片元数据失败");
+            }
+        }
+
+        /// <summary>
+        /// 按需加载指定子任务的完整图片数据
+        /// </summary>
+        /// <param name="subTaskId">子任务ID</param>
+        /// <returns>包含二进制数据的图片列表</returns>
+        public async Task<List<SubTaskImage>> LoadFullImageDataAsync(Guid subTaskId)
+        {
+            try
+            {
+                _logger.LogDebug("按需加载子任务完整图片数据: SubTaskId={SubTaskId}", subTaskId);
+                
+                // 从数据库获取包含二进制数据的完整图片信息
+                var fullImages = new List<SubTaskImage>();
+                
+                lock (_lock)
+                {
+                    var mainTask = _tasks.FirstOrDefault(t => t.SubTasks.Any(st => st.Id == subTaskId));
+                    if (mainTask != null)
+                    {
+                        var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
+                        if (subTask != null && subTask.Images.Any())
+                        {
+                            // 如果内存中已有图片元数据，则根据ID逐个加载完整数据
+                            var loadImageTasks = subTask.Images.Select(async img =>
+                            {
+                                var fullImage = await _sqlserverService.GetSubTaskImageAsync(img.Id);
+                                if (fullImage != null)
+                                {
+                                    fullImages.Add(fullImage);
+                                }
+                            });
+                            
+                            Task.WhenAll(loadImageTasks).Wait();
+                        }
+                    }
+                }
+                
+                if (!fullImages.Any())
+                {
+                    // 如果内存中没有图片元数据，直接从数据库加载
+                    fullImages = await _sqlserverService.GetSubTaskImagesAsync(subTaskId);
+                }
+                
+                _logger.LogDebug("按需加载完成: SubTaskId={SubTaskId}, 图片数={ImageCount}", 
+                    subTaskId, fullImages.Count);
+                
+                return fullImages;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "按需加载图片数据失败: SubTaskId={SubTaskId}", subTaskId);
+                return new List<SubTaskImage>();
             }
         }
     }

@@ -157,8 +157,8 @@ namespace WebApplication_Drone.Services
                     new SqlParameter("@name", drone.Name),
                     new SqlParameter("@modelStatus", (int)drone.ModelStatus),
                     new SqlParameter("@modelType", drone.ModelType),
-                    new SqlParameter("@registrationDate", DateTime.UtcNow),
-                    new SqlParameter("@now", DateTime.UtcNow)
+                    new SqlParameter("@registrationDate", DateTime.Now),
+                    new SqlParameter("@now", DateTime.Now)
                 });
 
                 await cmd.ExecuteNonQueryAsync();
@@ -218,8 +218,8 @@ namespace WebApplication_Drone.Services
             new SqlParameter("@Name", drone.Name),
             new SqlParameter("@ModelStatus", (int)drone.ModelStatus),
             new SqlParameter("@ModelType", drone.ModelType),
-            new SqlParameter("@RegistrationDate", DateTime.UtcNow),
-            new SqlParameter("@LastHeartbeat", DateTime.UtcNow)
+            new SqlParameter("@RegistrationDate", DateTime.Now),
+            new SqlParameter("@LastHeartbeat", DateTime.Now)
         };
 
             await ExecuteNonQueryAsync(sql, parameters);
@@ -414,8 +414,8 @@ namespace WebApplication_Drone.Services
                     new SqlParameter("@name", drone.Name ?? ""),
                     new SqlParameter("@modelStatus", (int)drone.ModelStatus),
                     new SqlParameter("@modelType", drone.ModelType ?? ""),
-                    new SqlParameter("@registrationDate", DateTime.UtcNow),
-                    new SqlParameter("@now", DateTime.UtcNow)
+                    new SqlParameter("@registrationDate", DateTime.Now),
+                    new SqlParameter("@now", DateTime.Now)
                 });
                 await mergeCmd.ExecuteNonQueryAsync();
                 _logger.LogDebug("Successfully merged drone {DroneId} basic info", drone.Id);
@@ -456,7 +456,7 @@ namespace WebApplication_Drone.Services
             {
                 new SqlParameter("@DroneId", drone.Id),
                 new SqlParameter("@Status", (int)drone.Status),
-                new SqlParameter("@Timestamp", DateTime.UtcNow),
+                new SqlParameter("@Timestamp", DateTime.Now),
                 new SqlParameter("@CpuUsage", ClampDecimal(drone.cpu_used_rate, 0m, 999.99m)),
                 new SqlParameter("@BandwidthAvailable", ClampDecimal(drone.left_bandwidth, 0m, 9999.99m)),
                 new SqlParameter("@MemoryUsage", ClampDecimal(drone.memory, 0m, 9999.99m)),
@@ -491,7 +491,7 @@ namespace WebApplication_Drone.Services
                 {
                     new SqlParameter("@DroneId", drone.Id),
                     new SqlParameter("@SubTaskId", subTask.Id),
-                    new SqlParameter("@AssignmentTime", DateTime.UtcNow)
+                    new SqlParameter("@AssignmentTime", DateTime.Now)
                 });
                 await insertCmd.ExecuteNonQueryAsync();
             }
@@ -607,6 +607,72 @@ namespace WebApplication_Drone.Services
                     CompletedTime = reader.IsDBNull(reader.GetOrdinal("CompletedTime")) ? null : reader.GetDateTime(reader.GetOrdinal("CompletedTime"))
                 };
                 mainTasks.Add(mainTask);
+            }
+
+            return mainTasks;
+        }
+
+        /// <summary>
+        /// 获取主任务总数
+        /// </summary>
+        /// <returns>主任务总数</returns>
+        public async Task<int> GetMainTaskCountAsync()
+        {
+            try
+            {
+                var sql = "SELECT COUNT(*) FROM MainTasks";
+                using var connection = await CreateConnectionAsync();
+                using var cmd = new SqlCommand(sql, connection);
+                var result = await cmd.ExecuteScalarAsync();
+                return Convert.ToInt32(result);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "获取主任务总数失败");
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// 分页获取主任务数据
+        /// </summary>
+        /// <param name="page">页码（从0开始）</param>
+        /// <param name="pageSize">每页数量</param>
+        /// <returns>主任务列表</returns>
+        public async Task<List<MainTask>> GetMainTasksByPageAsync(int page, int pageSize)
+        {
+            var mainTasks = new List<MainTask>();
+            var sql = @"
+                SELECT Id, Description, Status, CreationTime, CompletedTime 
+                FROM MainTasks 
+                ORDER BY CreationTime DESC
+                OFFSET @Offset ROWS 
+                FETCH NEXT @PageSize ROWS ONLY";
+
+            try
+            {
+                using var connection = await CreateConnectionAsync();
+                using var cmd = new SqlCommand(sql, connection);
+                cmd.Parameters.AddWithValue("@Offset", page * pageSize);
+                cmd.Parameters.AddWithValue("@PageSize", pageSize);
+                
+                using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    var mainTask = new MainTask
+                    {
+                        Id = reader.GetGuid(reader.GetOrdinal("Id")),
+                        Description = reader.GetString(reader.GetOrdinal("Description")),
+                        Status = (System.Threading.Tasks.TaskStatus)reader.GetByte(reader.GetOrdinal("Status")),
+                        CreationTime = reader.GetDateTime(reader.GetOrdinal("CreationTime")),
+                        CompletedTime = reader.IsDBNull(reader.GetOrdinal("CompletedTime")) ? null : reader.GetDateTime(reader.GetOrdinal("CompletedTime"))
+                    };
+                    mainTasks.Add(mainTask);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "分页获取主任务数据失败: Page={Page}, PageSize={PageSize}", page, pageSize);
             }
 
             return mainTasks;
@@ -823,7 +889,7 @@ namespace WebApplication_Drone.Services
                 {
                     new SqlParameter("@DroneId", drone.Id),
                     new SqlParameter("@Status", (int)drone.Status),
-                    new SqlParameter("@Timestamp", DateTime.UtcNow),
+                    new SqlParameter("@Timestamp", DateTime.Now),
                     new SqlParameter("@CpuUsage", ClampDecimal(drone.cpu_used_rate, 0m, 999.99m)),
                     new SqlParameter("@BandwidthAvailable", ClampDecimal(drone.left_bandwidth, 0m, 9999.99m)),
                     new SqlParameter("@MemoryUsage", ClampDecimal(drone.memory, 0m, 9999.99m)),
@@ -860,7 +926,7 @@ namespace WebApplication_Drone.Services
                     {
                         new SqlParameter("@DroneId", drone.Id),
                         new SqlParameter("@Status", (int)drone.Status),
-                        new SqlParameter("@Timestamp", DateTime.UtcNow),
+                        new SqlParameter("@Timestamp", DateTime.Now),
                         new SqlParameter("@CpuUsage", ClampDecimal(drone.cpu_used_rate, 0m, 999.99m)),
                         new SqlParameter("@BandwidthAvailable", ClampDecimal(drone.left_bandwidth, 0m, 9999.99m)),
                         new SqlParameter("@MemoryUsage", ClampDecimal(drone.memory, 0m, 9999.99m)),
@@ -968,18 +1034,19 @@ namespace WebApplication_Drone.Services
         /// <param name="imageIndex">图片序号</param>
         /// <param name="description">图片描述</param>
         /// <returns>图片ID</returns>
-        public async Task<long> SaveSubTaskImageAsync(Guid subTaskId, byte[] imageData, string fileName, int imageIndex = 1, string? description = null)
+        public async Task<Guid> SaveSubTaskImageAsync(Guid subTaskId, byte[] imageData, string fileName, int imageIndex = 1, string? description = null)
         {
             var fileExtension = Path.GetExtension(fileName).ToLowerInvariant();
             var contentType = GetContentType(fileExtension);
+            var imageId = Guid.NewGuid();
 
             var sql = @"
-                INSERT INTO SubTaskImages (SubTaskId, ImageData, FileName, FileExtension, FileSize, ContentType, ImageIndex, Description)
-                VALUES (@SubTaskId, @ImageData, @FileName, @FileExtension, @FileSize, @ContentType, @ImageIndex, @Description);
-                SELECT CAST(SCOPE_IDENTITY() AS BIGINT);";
+                INSERT INTO SubTaskImages (Id, SubTaskId, ImageData, FileName, FileExtension, FileSize, ContentType, ImageIndex, Description)
+                VALUES (@Id, @SubTaskId, @ImageData, @FileName, @FileExtension, @FileSize, @ContentType, @ImageIndex, @Description);";
 
             var parameters = new[]
             {
+                new SqlParameter("@Id", imageId),
                 new SqlParameter("@SubTaskId", subTaskId),
                 new SqlParameter("@ImageData", imageData),
                 new SqlParameter("@FileName", fileName),
@@ -995,8 +1062,7 @@ namespace WebApplication_Drone.Services
                 using var connection = await CreateConnectionAsync();
                 using var command = new SqlCommand(sql, connection);
                 command.Parameters.AddRange(parameters);
-                var result = await command.ExecuteScalarAsync();
-                var imageId = Convert.ToInt64(result);
+                await command.ExecuteNonQueryAsync();
                 
                 _logger.LogInformation("图片保存到数据库成功: SubTaskId={SubTaskId}, ImageId={ImageId}, FileName={FileName}, Size={Size}字节", 
                     subTaskId, imageId, fileName, imageData.Length);
@@ -1011,7 +1077,7 @@ namespace WebApplication_Drone.Services
         }
 
         /// <summary>
-        /// 获取子任务的所有图片
+        /// 获取子任务的所有图片（包含二进制数据）
         /// </summary>
         /// <param name="subTaskId">子任务ID</param>
         /// <returns>图片列表</returns>
@@ -1035,7 +1101,7 @@ namespace WebApplication_Drone.Services
                 {
                     images.Add(new SubTaskImage
                     {
-                        Id = reader.GetInt64(reader.GetOrdinal("Id")),
+                        Id = reader.GetGuid(reader.GetOrdinal("Id")),
                         SubTaskId = reader.GetGuid(reader.GetOrdinal("SubTaskId")),
                         FileName = reader.GetString(reader.GetOrdinal("FileName")),
                         FileExtension = reader.GetString(reader.GetOrdinal("FileExtension")),
@@ -1056,11 +1122,60 @@ namespace WebApplication_Drone.Services
         }
 
         /// <summary>
+        /// 获取子任务的图片元数据（不包含二进制数据，用于内存优化）
+        /// </summary>
+        /// <param name="subTaskId">子任务ID</param>
+        /// <returns>图片元数据列表</returns>
+        public async Task<List<SubTaskImage>> GetSubTaskImageMetadataAsync(Guid subTaskId)
+        {
+            var images = new List<SubTaskImage>();
+            var sql = @"
+                SELECT Id, SubTaskId, FileName, FileExtension, FileSize, ContentType, ImageIndex, UploadTime, Description
+                FROM SubTaskImages
+                WHERE SubTaskId = @SubTaskId
+                ORDER BY ImageIndex, UploadTime";
+
+            try
+            {
+                using var connection = await CreateConnectionAsync();
+                using var command = new SqlCommand(sql, connection);
+                command.Parameters.AddWithValue("@SubTaskId", subTaskId);
+
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    images.Add(new SubTaskImage
+                    {
+                        Id = reader.GetGuid(reader.GetOrdinal("Id")),
+                        SubTaskId = reader.GetGuid(reader.GetOrdinal("SubTaskId")),
+                        // 不加载ImageData字段，节省内存
+                        ImageData = null, 
+                        FileName = reader.GetString(reader.GetOrdinal("FileName")),
+                        FileExtension = reader.GetString(reader.GetOrdinal("FileExtension")),
+                        FileSize = reader.GetInt64(reader.GetOrdinal("FileSize")),
+                        ContentType = reader.GetString(reader.GetOrdinal("ContentType")),
+                        ImageIndex = reader.GetInt32(reader.GetOrdinal("ImageIndex")),
+                        UploadTime = reader.GetDateTime(reader.GetOrdinal("UploadTime")),
+                        Description = reader.IsDBNull(reader.GetOrdinal("Description")) ? null : reader.GetString(reader.GetOrdinal("Description"))
+                    });
+                }
+                
+                _logger.LogDebug("获取子任务图片元数据成功: SubTaskId={SubTaskId}, 图片数={ImageCount}", subTaskId, images.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "获取子任务图片元数据失败: SubTaskId={SubTaskId}", subTaskId);
+            }
+
+            return images;
+        }
+
+        /// <summary>
         /// 根据图片ID获取图片数据
         /// </summary>
         /// <param name="imageId">图片ID</param>
         /// <returns>图片数据</returns>
-        public async Task<SubTaskImage?> GetSubTaskImageAsync(long imageId)
+        public async Task<SubTaskImage?> GetSubTaskImageAsync(Guid imageId)
         {
             var sql = @"
                 SELECT Id, SubTaskId, ImageData, FileName, FileExtension, FileSize, ContentType, ImageIndex, UploadTime, Description
@@ -1078,7 +1193,7 @@ namespace WebApplication_Drone.Services
                 {
                     return new SubTaskImage
                     {
-                        Id = reader.GetInt64(reader.GetOrdinal("Id")),
+                        Id = reader.GetGuid(reader.GetOrdinal("Id")),
                         SubTaskId = reader.GetGuid(reader.GetOrdinal("SubTaskId")),
                         ImageData = (byte[])reader["ImageData"],
                         FileName = reader.GetString(reader.GetOrdinal("FileName")),
@@ -1126,7 +1241,7 @@ namespace WebApplication_Drone.Services
         /// </summary>
         /// <param name="imageId">图片ID</param>
         /// <returns>是否删除成功</returns>
-        public async Task<bool> DeleteSubTaskImageAsync(long imageId)
+        public async Task<bool> DeleteSubTaskImageAsync(Guid imageId)
         {
             var sql = "DELETE FROM SubTaskImages WHERE Id = @ImageId";
             
@@ -1218,6 +1333,74 @@ namespace WebApplication_Drone.Services
         }
 
         /// <summary>
+        /// 获取子任务的图片数量
+        /// </summary>
+        public async Task<int> GetSubTaskImageCountAsync(Guid subTaskId)
+        {
+            try
+            {
+                var sql = "SELECT COUNT(*) FROM SubTaskImages WHERE SubTaskId = @SubTaskId";
+                using var connection = await CreateConnectionAsync();
+                using var command = new SqlCommand(sql, connection);
+                command.Parameters.AddWithValue("@SubTaskId", subTaskId);
+                
+                var result = await command.ExecuteScalarAsync();
+                return Convert.ToInt32(result);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "获取子任务图片数量失败: SubTaskId={SubTaskId}", subTaskId);
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// 获取最近上传的图片
+        /// </summary>
+        public async Task<List<SubTaskImage>> GetRecentSubTaskImagesAsync(DateTime since, int limit = 50)
+        {
+            try
+            {
+                var sql = @"
+                    SELECT TOP(@Limit) Id, SubTaskId, ImageData, FileName, FileExtension, FileSize, ContentType, ImageIndex, UploadTime, Description
+                    FROM SubTaskImages 
+                    WHERE UploadTime >= @Since
+                    ORDER BY UploadTime DESC";
+
+                using var connection = await CreateConnectionAsync();
+                using var command = new SqlCommand(sql, connection);
+                command.Parameters.AddWithValue("@Since", since);
+                command.Parameters.AddWithValue("@Limit", limit);
+
+                var images = new List<SubTaskImage>();
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    images.Add(new SubTaskImage
+                    {
+                        Id = reader.GetGuid("Id"),
+                        SubTaskId = reader.GetGuid("SubTaskId"),
+                        ImageData = (byte[])reader["ImageData"],
+                        FileName = reader.GetString("FileName"),
+                        FileExtension = reader.GetString("FileExtension"),
+                        FileSize = reader.GetInt64("FileSize"),
+                        ContentType = reader.GetString("ContentType"),
+                        ImageIndex = reader.GetInt32("ImageIndex"),
+                        UploadTime = reader.GetDateTime("UploadTime"),
+                        Description = reader.IsDBNull("Description") ? "" : reader.GetString("Description")
+                    });
+                }
+                
+                return images;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "获取最近图片失败");
+                return new List<SubTaskImage>();
+            }
+        }
+
+        /// <summary>
         /// 从数据库获取子任务信息（根据子任务名称）
         /// </summary>
         /// <param name="taskId">主任务ID</param>
@@ -1269,6 +1452,70 @@ namespace WebApplication_Drone.Services
             }
         }
 
+        /// <summary>
+        /// 获取无人机总数
+        /// </summary>
+        /// <returns>无人机总数</returns>
+        public async Task<int> GetDroneCountAsync()
+        {
+            try
+            {
+                var sql = "SELECT COUNT(*) FROM Drones";
+                using var connection = await CreateConnectionAsync();
+                using var cmd = new SqlCommand(sql, connection);
+                var result = await cmd.ExecuteScalarAsync();
+                return Convert.ToInt32(result);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "获取无人机总数失败");
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// 分页获取无人机数据
+        /// </summary>
+        /// <param name="page">页码（从0开始）</param>
+        /// <param name="pageSize">每页数量</param>
+        /// <returns>无人机列表</returns>
+        public async Task<List<Drone>> GetDronesByPageAsync(int page, int pageSize)
+        {
+            var drones = new List<Drone>();
+            var sql = @"
+                SELECT Id, Name, ModelStatus, ModelType, RegistrationDate, LastHeartbeat 
+                FROM Drones 
+                ORDER BY RegistrationDate
+                OFFSET @Offset ROWS 
+                FETCH NEXT @PageSize ROWS ONLY";
+
+            try
+            {
+                using var connection = await CreateConnectionAsync();
+                using var cmd = new SqlCommand(sql, connection);
+                cmd.Parameters.AddWithValue("@Offset", page * pageSize);
+                cmd.Parameters.AddWithValue("@PageSize", pageSize);
+                
+                using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    var drone = new Drone
+                    {
+                        Id = reader.GetGuid(reader.GetOrdinal("Id")),
+                        Name = reader.GetString(reader.GetOrdinal("Name")),
+                        ModelStatus = (ModelStatus)reader.GetByte(reader.GetOrdinal("ModelStatus")),
+                        ModelType = reader.GetString(reader.GetOrdinal("ModelType"))
+                    };
+                    drones.Add(drone);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "分页获取无人机数据失败: Page={Page}, PageSize={PageSize}", page, pageSize);
+            }
+
+            return drones;
+        }
 
     }
 }

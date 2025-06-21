@@ -646,12 +646,20 @@
                 <button type="button" class="btn btn-secondary" @onclick="CloseSubTaskImageModal">
                     <i class="bi bi-x-circle"></i> 关闭
                 </button>
-                @{ var downloadImageUrls = selectedSubTask?.GetAllImageUrls() ?? new List<string>(); }
-                @if (downloadImageUrls.Any())
+                @if (isLoadingImages)
                 {
-                    @if (downloadImageUrls.Count == 1)
+                    <div class="d-flex align-items-center">
+                        <div class="spinner-border spinner-border-sm me-2" role="status">
+                            <span class="visually-hidden">加载中...</span>
+                        </div>
+                        <span>正在加载图片...</span>
+                    </div>
+                }
+                else if (currentImageUrls.Any())
+                {
+                    @if (currentImageUrls.Count == 1)
                     {
-                        <a href="@downloadImageUrls[0]" download class="btn btn-primary">
+                        <a href="@currentImageUrls[0]" download class="btn btn-primary">
                             <i class="bi bi-download"></i> 下载图片
                         </a>
                     }
@@ -659,14 +667,14 @@
                     {
                         <div class="btn-group" role="group">
                             <button type="button" class="btn btn-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
-                                <i class="bi bi-download"></i> 下载图片 (@downloadImageUrls.Count)
+                                <i class="bi bi-download"></i> 下载图片 (@currentImageUrls.Count)
                             </button>
                             <ul class="dropdown-menu">
-                                @for (int i = 0; i < downloadImageUrls.Count; i++)
+                                @for (int i = 0; i < currentImageUrls.Count; i++)
                                 {
                                     var index = i;
                                     <li>
-                                        <a class="dropdown-item" href="@downloadImageUrls[index]" download>
+                                        <a class="dropdown-item" href="@currentImageUrls[index]" download>
                                             <i class="bi bi-image"></i> 下载图片 @(index + 1)
                                         </a>
                                     </li>
@@ -712,6 +720,9 @@
 
     // 子任务图片查看字段
     private SubTask? selectedSubTask;
+    private List<string> currentImageUrls = new();
+    private int currentImageCount = 0;
+    private bool isLoadingImages = false;
 
     protected override async Task OnInitializedAsync()
     {
@@ -1099,6 +1110,9 @@
     {
         selectedSubTask = subTask;
         
+        // 实时从API获取图片信息
+        await LoadSubTaskImages(subTask.Id);
+        
         try
         {
             // 检查Bootstrap是否加载
@@ -1202,17 +1216,86 @@
         }
     }
 
+    // 实时从API加载子任务图片
+    private async Task LoadSubTaskImages(Guid subTaskId)
+    {
+        try
+        {
+            isLoadingImages = true;
+            currentImageUrls.Clear();
+            currentImageCount = 0;
+            StateHasChanged();
+
+            // 使用HttpClientFactory创建HttpClient
+            using var httpClient = HttpClientFactory.CreateClient();
+            
+            // 调用API获取图片列表
+            var apiUrl = $"http://localhost:5192/api/Tasks/subtask/{subTaskId}/images";
+            var response = await httpClient.GetAsync(apiUrl);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                var jsonContent = await response.Content.ReadAsStringAsync();
+                Logger.LogInformation("API响应: {Response}", jsonContent);
+                
+                // 使用JsonDocument解析JSON
+                using var jsonDoc = System.Text.Json.JsonDocument.Parse(jsonContent);
+                var imageArray = jsonDoc.RootElement;
+                
+                Logger.LogInformation("解析JSON成功，数组长度: {ArrayLength}", imageArray.GetArrayLength());
+                
+                if (imageArray.ValueKind == System.Text.Json.JsonValueKind.Array && imageArray.GetArrayLength() > 0)
+                {
+                    currentImageUrls = new List<string>();
+                    foreach (var imageElement in imageArray.EnumerateArray())
+                    {
+                        if (imageElement.TryGetProperty("id", out var idProperty))
+                        {
+                            var imageId = idProperty.GetString();
+                            if (!string.IsNullOrEmpty(imageId))
+                            {
+                                currentImageUrls.Add($"http://localhost:5192/api/Tasks/images/{imageId}/view");
+                            }
+                        }
+                    }
+                    
+                    currentImageCount = currentImageUrls.Count;
+                    
+                    Logger.LogInformation("成功加载子任务图片: SubTaskId={SubTaskId}, 图片数={ImageCount}", 
+                        subTaskId, currentImageCount);
+                }
+                else
+                {
+                    Logger.LogInformation("子任务没有图片: SubTaskId={SubTaskId}", subTaskId);
+                }
+            }
+            else
+            {
+                Logger.LogWarning("获取子任务图片失败: SubTaskId={SubTaskId}, StatusCode={StatusCode}, Content={Content}", 
+                    subTaskId, response.StatusCode, await response.Content.ReadAsStringAsync());
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "加载子任务图片异常: SubTaskId={SubTaskId}", subTaskId);
+        }
+        finally
+        {
+            isLoadingImages = false;
+            StateHasChanged();
+        }
+    }
+
     // 批量下载图片方法
     private async Task DownloadAllImages()
     {
-        var imageUrls = selectedSubTask?.GetAllImageUrls();
-        if (imageUrls?.Any() != true)
+        if (!currentImageUrls.Any())
             return;
 
         try
         {
             // 为每个图片创建下载链接并触发下载
-            foreach (var imagePath in imageUrls)
+            foreach (var imagePath in currentImageUrls)
             {
                 await JSRuntime.InvokeVoidAsync("eval", $@"
                     var link = document.createElement('a');
@@ -1227,7 +1310,7 @@
                 await Task.Delay(200);
             }
             
-            await JSRuntime.InvokeVoidAsync("alert", $"开始下载 {imageUrls.Count} 张图片");
+            await JSRuntime.InvokeVoidAsync("alert", $"开始下载 {currentImageUrls.Count} 张图片");
         }
         catch (Exception ex)
         {

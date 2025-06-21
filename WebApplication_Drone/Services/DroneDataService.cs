@@ -497,7 +497,7 @@ namespace WebApplication_Drone.Services
         /// <returns></returns>
         public async Task<List<DroneDataPoint>> GetRecentDroneDataAsync(Guid droneId, TimeSpan duration)
         {
-              return await _sqlserverService.GetDroneStatusHistoryAsync(droneId, DateTime.UtcNow - duration, DateTime.UtcNow);            
+              return await _sqlserverService.GetDroneStatusHistoryAsync(droneId, DateTime.Now - duration, DateTime.Now);            
         }
         /// <summary>
         /// 获取指定无人机在指定任务期间的数据
@@ -530,6 +530,122 @@ namespace WebApplication_Drone.Services
         public async Task<List<DroneDataPoint>> GetAllDronesDataInTimeRangeAsync(DateTime startTime, DateTime endTime)
         {
             return await _sqlserverService.GetAllDronesDataInTimeRangeAsync(startTime, endTime);
+        }
+
+        /// <summary>
+        /// 从数据库加载所有无人机数据（系统启动时调用）
+        /// </summary>
+        public async Task LoadDronesFromDatabaseAsync()
+        {
+            try
+            {
+                _logger.LogInformation("开始从数据库加载无人机数据...");
+                
+                // 从数据库获取基本无人机信息
+                var dbDrones = await _sqlserverService.GetAllDronesAsync();
+                
+                if (dbDrones.Any())
+                {
+                    lock (_lock)
+                    {
+                        _drones.Clear();
+                        
+                        // 设置无人机为离线状态（启动时默认状态）
+                        foreach (var drone in dbDrones)
+                        {
+                            drone.Status = DroneStatus.Offline;
+                            drone.ConnectedDroneIds.Clear();
+                            drone.AssignedSubTasks.Clear();
+                            _drones.Add(drone);
+                        }
+                        
+                        _logger.LogInformation("从数据库加载了 {DroneCount} 个无人机", dbDrones.Count);
+                    }
+                    
+                    // 触发加载完成事件
+                    foreach (var drone in dbDrones)
+                    {
+                        OnDroneChanged("LoadedFromDatabase", drone);
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("数据库中未找到无人机数据");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "从数据库加载无人机数据失败: {Message}", ex.Message);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// 批量从数据库加载无人机数据（分页支持）
+        /// </summary>
+        /// <param name="pageSize">每页数量</param>
+        /// <param name="maxConcurrency">最大并发数</param>
+        public async Task LoadDronesFromDatabaseBatchAsync(int pageSize = 100, int maxConcurrency = 5)
+        {
+            try
+            {
+                _logger.LogInformation("开始分批从数据库加载无人机数据，页大小: {PageSize}", pageSize);
+                
+                var semaphore = new SemaphoreSlim(maxConcurrency);
+                var totalDrones = await _sqlserverService.GetDroneCountAsync();
+                var pageCount = (int)Math.Ceiling((double)totalDrones / pageSize);
+                
+                _logger.LogInformation("总无人机数: {TotalDrones}, 分页数: {PageCount}", totalDrones, pageCount);
+                
+                var loadTasks = new List<Task>();
+                
+                for (int page = 0; page < pageCount; page++)
+                {
+                    var currentPage = page;
+                    var task = Task.Run(async () =>
+                    {
+                        await semaphore.WaitAsync();
+                        try
+                        {
+                            var drones = await _sqlserverService.GetDronesByPageAsync(currentPage, pageSize);
+                            
+                            lock (_lock)
+                            {
+                                foreach (var drone in drones)
+                                {
+                                    drone.Status = DroneStatus.Offline;
+                                    drone.ConnectedDroneIds.Clear();
+                                    drone.AssignedSubTasks.Clear();
+                                    
+                                    // 检查是否已存在，避免重复
+                                    if (!_drones.Any(d => d.Id == drone.Id))
+                                    {
+                                        _drones.Add(drone);
+                                    }
+                                }
+                            }
+                            
+                            _logger.LogDebug("加载第 {Page}/{TotalPages} 页，{DroneCount} 个无人机", 
+                                currentPage + 1, pageCount, drones.Count);
+                        }
+                        finally
+                        {
+                            semaphore.Release();
+                        }
+                    });
+                    
+                    loadTasks.Add(task);
+                }
+                
+                await Task.WhenAll(loadTasks);
+                
+                _logger.LogInformation("分批加载完成，总共加载 {TotalLoaded} 个无人机", _drones.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "分批加载无人机数据失败: {Message}", ex.Message);
+                throw;
+            }
         }
     }
     /// <summary>

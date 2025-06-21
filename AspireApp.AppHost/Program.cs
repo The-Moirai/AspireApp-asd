@@ -88,7 +88,7 @@ var creationScript = $$"""
 
     -- 子任务图片表
     CREATE TABLE SubTaskImages (
-        Id BIGINT IDENTITY(1,1) PRIMARY KEY,
+        Id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
         SubTaskId UNIQUEIDENTIFIER NOT NULL,
         ImageData VARBINARY(MAX) NOT NULL,  -- 图片二进制数据
         FileName NVARCHAR(255) NOT NULL,  -- 原始文件名
