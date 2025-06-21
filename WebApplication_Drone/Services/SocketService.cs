@@ -17,14 +17,14 @@ namespace WebApplication_Drone.Services
         private ConcurrentQueue<byte[]> _sendQueue = new ConcurrentQueue<byte[]>();// 发送队列
         private SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);// 发送锁
         private const int MaxQueueSize = 1000; // 队列最大容量
-        private TcpClient _client;
-        private NetworkStream _stream;
+        private TcpClient? _client;
+        private NetworkStream? _stream;
         private bool _isReconnecting;      // 是否正在重连
         private bool _autoReconnect = true; // 是否启用自动重连
         private int _maxRetries = 5;       // 最大重试次数
         private int _currentRetry = 0;     // 当前重试次数
         private int _retryInterval = 30; // 重试间隔（毫秒）
-        private string _currentHost;
+        private string? _currentHost;
         private int _currentPort;
 
         private readonly TaskDataService _taskDataService;
@@ -34,7 +34,6 @@ namespace WebApplication_Drone.Services
 
         public SocketService(TaskDataService taskDataService, DroneDataService droneDataService, ILogger<SocketService> logger)
         {
-
             _taskDataService = taskDataService;
             _taskDataService.TaskChanged += OnTaskChanged;
             _droneDataService = droneDataService;
@@ -204,7 +203,7 @@ namespace WebApplication_Drone.Services
         /// 检查连接状态
         /// </summary>
         /// <returns></returns>
-        private bool IsConnected()
+        public bool IsConnected()
         {
             return _client?.Connected == true && _stream?.CanWrite == true;
         }

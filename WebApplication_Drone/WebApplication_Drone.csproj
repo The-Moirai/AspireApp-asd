@@ -17,11 +17,11 @@
     <PackageReference Include="Swashbuckle.AspNetCore" Version="9.0.1" />
     
     <!-- 缓存和健康检查相关包 -->
-    <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="8.0.0" />
     <PackageReference Include="StackExchange.Redis" Version="2.7.10" />
-    <PackageReference Include="AspNetCore.HealthChecks.SqlServer" Version="8.0.2" />
+    <PackageReference Include="AspNetCore.HealthChecks.SqlServer" Version="9.0.0" />
     <PackageReference Include="AspNetCore.HealthChecks.Redis" Version="8.0.1" />
-    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="9.0.6" />
+    <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="9.0.6" />
   </ItemGroup>
 
   <ItemGroup>

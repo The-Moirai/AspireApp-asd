@@ -3,23 +3,142 @@ using ClassLibrary_Core.Drone;
 using ClassLibrary_Core.Mission;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
 using System.Threading.Tasks;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 
 namespace WebApplication_Drone.Services
 {
-    public class TaskDataService
+    /// <summary>
+    /// 任务服务配置选项
+    /// </summary>
+    public class TaskServiceOptions
     {
-        private readonly List<MainTask> _tasks = new();
-        private readonly object _lock = new();
-        private readonly SqlserverService _sqlserverService;
-        private readonly ILogger<TaskDataService> _logger;
+        /// <summary>最大重试次数</summary>
+        public int MaxRetryAttempts { get; set; } = 3;
+        
+        /// <summary>缓存过期时间(分钟)</summary>
+        public int CacheExpirationMinutes { get; set; } = 10;
+        
+        /// <summary>最大并发操作数</summary>
+        public int MaxConcurrentOperations { get; set; } = 10;
+        
+        /// <summary>启用实时更新</summary>
+        public bool EnableRealTimeUpdates { get; set; } = true;
+        
+        /// <summary>批处理大小</summary>
+        public int BatchSize { get; set; } = 50;
+    }
 
-        public TaskDataService(SqlserverService sqlserverService, ILogger<TaskDataService> logger)
+    /// <summary>
+    /// 任务服务统计信息
+    /// </summary>
+    public class TaskServiceStatistics
+    {
+        /// <summary>总任务数量</summary>
+        public int TotalTasks { get; set; }
+        
+        /// <summary>活跃任务数量</summary>
+        public int ActiveTasks { get; set; }
+        
+        /// <summary>已完成任务数量</summary>
+        public int CompletedTasks { get; set; }
+        
+        /// <summary>总操作次数</summary>
+        public long TotalOperations { get; set; }
+        
+        /// <summary>缓存命中次数</summary>
+        public long CacheHits { get; set; }
+        
+        /// <summary>缓存未命中次数</summary>
+        public long CacheMisses { get; set; }
+        
+        /// <summary>缓存命中率</summary>
+        public double CacheHitRate { get; set; }
+        
+        /// <summary>最后更新时间</summary>
+        public DateTime LastUpdateTime { get; set; }
+    }
+
+    /// <summary>
+    /// 优化后的任务数据服务 - 使用缓存和并发集合提升性能
+    /// </summary>
+    public class TaskDataService : IDisposable
+    {
+        #region 私有字段
+
+        /// <summary>
+        /// 线程安全的任务数据字典 - 使用ConcurrentDictionary替代List+Lock
+        /// </summary>
+        private readonly ConcurrentDictionary<Guid, MainTask> _tasks = new();
+
+        /// <summary>
+        /// 读写锁 - 只在必要时使用
+        /// </summary>
+        private readonly ReaderWriterLockSlim _rwLock = new();
+        
+        /// <summary>
+        /// 数据库服务
+        /// </summary>
+        private readonly SqlserverService _sqlserverService;
+        
+        /// <summary>
+        /// 日志记录器
+        /// </summary>
+        private readonly ILogger<TaskDataService> _logger;
+        
+        /// <summary>
+        /// 内存缓存
+        /// </summary>
+        private readonly IMemoryCache _memoryCache;
+        
+        /// <summary>
+        /// 配置选项
+        /// </summary>
+        private readonly TaskServiceOptions _options;
+        
+        /// <summary>
+        /// 性能计数器
+        /// </summary>
+        private long _totalOperations = 0;
+        private long _cacheHits = 0;
+        private long _cacheMisses = 0;
+        
+        /// <summary>
+        /// 缓存键前缀
+        /// </summary>
+        private const string CACHE_KEY_PREFIX = "task:";
+        private const string CACHE_KEY_ALL_TASKS = "tasks:all";
+        private const string CACHE_KEY_TASK_STATUS = "tasks:status:";
+        
+        /// <summary>
+        /// 释放标志
+        /// </summary>
+        private bool _disposed = false;
+
+        #endregion
+
+        #region 构造函数
+
+        public TaskDataService(
+            SqlserverService sqlserverService, 
+            ILogger<TaskDataService> logger,
+            IMemoryCache memoryCache,
+            IOptions<TaskServiceOptions> options)
         {
             _sqlserverService = sqlserverService;
             _logger = logger;
+            _memoryCache = memoryCache;
+            _options = options.Value;
+            
+            _logger.LogInformation("📋 TaskDataService 初始化完成 - 使用优化架构");
         }
+
+        #endregion
+
+        #region 事件
 
         /// <summary>
         /// 任务数据变更事件
@@ -29,27 +148,132 @@ namespace WebApplication_Drone.Services
         /// <summary>
         /// 任务数据变更事件触发方法
         /// </summary>
-        /// <param name="action"></param>
-        /// <param name="drone"></param>
-        protected virtual void OnDroneChanged(string action, MainTask mainTask)
+        protected virtual void OnTaskChanged(string action, MainTask mainTask)
         {
-            TaskChanged?.Invoke(this, new TaskChangedEventArgs
+            try
             {
-                Action = action,
-                MainTask = CloneTask(mainTask) // 深度克隆
-            });
+                TaskChanged?.Invoke(this, new TaskChangedEventArgs
+                {
+                    Action = action,
+                    MainTask = CloneTask(mainTask),
+                    Timestamp = DateTime.UtcNow
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "触发任务变更事件失败: {Action}, TaskId: {TaskId}", action, mainTask.Id);
+            }
         }
 
-       
+        #endregion
+
+        #region 核心CRUD操作 - 优化版本
+
+        /// <summary>
+        /// 获取所有任务数据 - 优先从缓存获取
+        /// </summary>
+        public async Task<List<MainTask>> GetTasksAsync()
+        {
+            var stopwatch = Stopwatch.StartNew();
+            Interlocked.Increment(ref _totalOperations);
+            
+            try
+            {
+                // 尝试从缓存获取
+                if (_memoryCache.TryGetValue(CACHE_KEY_ALL_TASKS, out List<MainTask>? cachedTasks))
+                {
+                    Interlocked.Increment(ref _cacheHits);
+                    _logger.LogDebug("从缓存获取所有任务数据 - 耗时: {ElapsedMs}ms", stopwatch.ElapsedMilliseconds);
+                    return cachedTasks!;
+                }
+
+                Interlocked.Increment(ref _cacheMisses);
+                
+                // 从内存获取
+                var tasks = _tasks.Values.Select(CloneTask).ToList();
+                
+                // 更新缓存
+                var cacheOptions = new MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(_options.CacheExpirationMinutes),
+                    SlidingExpiration = TimeSpan.FromMinutes(_options.CacheExpirationMinutes / 2),
+                    Priority = CacheItemPriority.High
+                };
+                
+                _memoryCache.Set(CACHE_KEY_ALL_TASKS, tasks, cacheOptions);
+                
+                _logger.LogDebug("获取所有任务数据 - 数量: {Count}, 耗时: {ElapsedMs}ms", 
+                    tasks.Count, stopwatch.ElapsedMilliseconds);
+                
+                return tasks;
+            }
+            finally
+            {
+                stopwatch.Stop();
+            }
+        }
+
+        /// <summary>
+        /// 获取指定任务 - 优化版本
+        /// </summary>
+        public async Task<MainTask?> GetTaskAsync(Guid id)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            Interlocked.Increment(ref _totalOperations);
+            
+            try
+            {
+                var cacheKey = CACHE_KEY_PREFIX + id.ToString();
+                
+                // 尝试从缓存获取
+                if (_memoryCache.TryGetValue(cacheKey, out MainTask? cachedTask))
+                {
+                    Interlocked.Increment(ref _cacheHits);
+                    return cachedTask;
+                }
+
+                Interlocked.Increment(ref _cacheMisses);
+                
+                // 从内存获取
+                if (_tasks.TryGetValue(id, out var task))
+                {
+                    var clonedTask = CloneTask(task);
+                    
+                    // 更新缓存
+                    var cacheOptions = new MemoryCacheEntryOptions
+                    {
+                        AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(_options.CacheExpirationMinutes),
+                        Priority = CacheItemPriority.Normal
+                    };
+                    
+                    _memoryCache.Set(cacheKey, clonedTask, cacheOptions);
+                    return clonedTask;
+                }
+                
+                return null;
+            }
+            finally
+            {
+                stopwatch.Stop();
+                if (stopwatch.ElapsedMilliseconds > 100)
+                {
+                    _logger.LogWarning("获取任务数据耗时过长: {ElapsedMs}ms, TaskId: {TaskId}", 
+                        stopwatch.ElapsedMilliseconds, id);
+                }
+            }
+        }
+
+        #endregion
+
         /// <summary>
         /// 获取所有大任务数据的副本
         /// </summary>
         /// <returns>任务列表</returns>
         public List<MainTask> GetTasks()
         {
-            lock (_lock)
+            lock (_rwLock)
             {
-                return _tasks.Select(t => t).ToList();
+                return _tasks.Values.Select(t => t).ToList();
             }
         }
         /// <summary>
@@ -59,9 +283,10 @@ namespace WebApplication_Drone.Services
         /// <returns>大任务实体</returns>
         public MainTask? GetTask(Guid id)
         {
-            lock (_lock)
+            lock (_rwLock)
             {
-                return _tasks.FirstOrDefault(t => t.Id == id);
+                _tasks.TryGetValue(id, out var task);
+                return task;
             }
         }
         /// <summary>
@@ -70,10 +295,13 @@ namespace WebApplication_Drone.Services
         /// <param name="tasks">大任务数据列表</param>
         public async void SetTasks(IEnumerable<MainTask> tasks)
         {
-            lock (_lock)
+            lock (_rwLock)
             {
                 _tasks.Clear();
-                _tasks.AddRange(tasks);
+                foreach (var task in tasks)
+                {
+                    _tasks.TryAdd(task.Id, task);
+                }
 
                 // 异步同步到数据库 - 创建快照避免集合修改异常
                 var tasksSnapshot = tasks.Select(CloneTask).ToList();
@@ -101,12 +329,12 @@ namespace WebApplication_Drone.Services
         /// </param>
         public async void AddTask(MainTask task, string CreatedBy)
         {
-            lock (_lock)
+            lock (_rwLock)
             {
-                if (!_tasks.Any(t => t.Id == task.Id))
+                if (!_tasks.ContainsKey(task.Id))
                 {
-                    _tasks.Add(task);
-                    OnDroneChanged("Add", task);
+                    _tasks.TryAdd(task.Id, task);
+                    OnTaskChanged("Add", task);
 
                     // 异步同步到数据库 - 创建快照避免集合修改异常
                     var taskSnapshot = CloneTask(task);
@@ -135,13 +363,12 @@ namespace WebApplication_Drone.Services
         /// </returns>
         public bool UpdateTask(MainTask task)
         {
-            lock (_lock)
+            lock (_rwLock)
             {
-                var idx = _tasks.FindIndex(t => t.Id == task.Id);
-                if (idx >= 0)
+                if (_tasks.ContainsKey(task.Id))
                 {
-                    _tasks[idx] = task;
-                    OnDroneChanged("update", task);
+                    _tasks[task.Id] = task;
+                    OnTaskChanged("update", task);
 
                     // 异步同步到数据库 - 创建快照避免集合修改异常
                     var taskSnapshot = CloneTask(task);
@@ -173,13 +400,11 @@ namespace WebApplication_Drone.Services
         /// </returns>
         public bool DeleteTask(Guid id)
         {
-            lock (_lock)
+            lock (_rwLock)
             {
-                var task = _tasks.FirstOrDefault(t => t.Id == id);
-                if (task != null)
+                if (_tasks.TryRemove(id, out var task))
                 {
-                    _tasks.Remove(task);
-                    OnDroneChanged("delete", task);
+                    OnTaskChanged("delete", task);
 
                     // 异步删除数据库记录
                     _ = Task.Run(async () =>
@@ -204,10 +429,10 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public bool UnloadSubTask(Guid mainTaskId, Guid subTaskId)
         {
-            lock (_lock)
+            lock (_rwLock)
             {
-                var mainTask = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
-                if (mainTask == null) return false;
+                if (!_tasks.ContainsKey(mainTaskId)) return false;
+                var mainTask = _tasks[mainTaskId];
                 var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
                 if (subTask == null) return false;
 
@@ -241,10 +466,10 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public bool ReloadSubTask(Guid mainTaskId, Guid subTaskId, string droneName)
         {
-            lock (_lock)
+            lock (_rwLock)
             {
-                var mainTask = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
-                if (mainTask == null) return false;
+                if (!_tasks.ContainsKey(mainTaskId)) return false;
+                var mainTask = _tasks[mainTaskId];
                 var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
                 if (subTask == null) return false;
 
@@ -276,10 +501,10 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public bool AssignSubTask(Guid mainTaskId, Guid subTaskId, string droneName)
         {
-            lock (_lock)
+            lock (_rwLock)
             {
-                var mainTask = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
-                if (mainTask == null) return false;
+                if (!_tasks.ContainsKey(mainTaskId)) return false;
+                var mainTask = _tasks[mainTaskId];
                 var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
                 if (subTask == null) return false;
 
@@ -312,23 +537,23 @@ namespace WebApplication_Drone.Services
         /// <returns>返回完成成功与否</returns>
         public bool CompleteSubTask(Guid mainTaskId, string subTaskDescription)
         {
-            lock (_lock)
+            lock (_rwLock)
             {
-                var task = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
-                if (task != null)
+                if (_tasks.ContainsKey(mainTaskId))
                 {
-                    var subTask = task.SubTasks.FirstOrDefault(st => st.Description == subTaskDescription);
+                    var mainTask = _tasks[mainTaskId];
+                    var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Description == subTaskDescription);
                     if (subTask != null && subTask.Status != System.Threading.Tasks.TaskStatus.RanToCompletion)
                     {
                         subTask.Status = System.Threading.Tasks.TaskStatus.RanToCompletion;
                         subTask.CompletedTime = DateTime.Now; // 使用当地时间保持一致性
-                        OnDroneChanged("SubTaskCompleted", task);
+                        OnTaskChanged("SubTaskCompleted", mainTask);
                         
                         _logger.LogInformation("子任务完成: TaskId={TaskId}, SubTask={SubTaskDescription}, CompletedTime={CompletedTime}", 
                             mainTaskId, subTaskDescription, subTask.CompletedTime);
 
                         // 异步同步到数据库
-                        var taskSnapshot = CloneTask(task);
+                        var taskSnapshot = CloneTask(mainTask);
                         _ = Task.Run(async () =>
                         {
                             try
@@ -352,10 +577,14 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public List<SubTask> GetSubTasks(Guid mainTaskId)
         {
-            lock (_lock)
+            lock (_rwLock)
             {
-                var mainTask = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
-                return mainTask?.SubTasks.ToList() ?? new List<SubTask>();
+                if (_tasks.ContainsKey(mainTaskId))
+                {
+                    var mainTask = _tasks[mainTaskId];
+                    return mainTask.SubTasks.ToList();
+                }
+                return new List<SubTask>();
             }
         }
         /// <summary>
@@ -363,10 +592,14 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public SubTask? GetSubTask(Guid mainTaskId, Guid subTaskId)
         {
-            lock (_lock)
+            lock (_rwLock)
             {
-                var mainTask = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
-                return mainTask?.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
+                if (_tasks.ContainsKey(mainTaskId))
+                {
+                    var mainTask = _tasks[mainTaskId];
+                    return mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
+                }
+                return null;
             }
         }
         /// <summary>
@@ -376,11 +609,11 @@ namespace WebApplication_Drone.Services
         /// <param name="subTask">子任务实体</param>
         public void addSubTasks(Guid mainTaskId, SubTask subTask)
         {
-            lock (_lock)
+            lock (_rwLock)
             {
-                var mainTask = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
-                if (mainTask != null)
+                if (_tasks.ContainsKey(mainTaskId))
                 {
+                    var mainTask = _tasks[mainTaskId];
                     subTask.ParentTask = mainTaskId; // 确保设置父任务ID
                     subTask.CreationTime = DateTime.Now; // 确保设置创建时间
                     subTask.AssignedTime = DateTime.Now;
@@ -490,10 +723,13 @@ namespace WebApplication_Drone.Services
                 await LoadTasksDataInParallel(dbTasks);
 
                 // 原子性更新内存数据
-                lock (_lock)
+                lock (_rwLock)
                 {
                     _tasks.Clear();
-                    _tasks.AddRange(dbTasks);
+                    foreach (var task in dbTasks)
+                    {
+                        _tasks.TryAdd(task.Id, task);
+                    }
                 }
                 
                 _logger.LogInformation("任务数据加载完成，总计 {MainTaskCount} 个主任务，{SubTaskCount} 个子任务", 
@@ -559,10 +795,13 @@ namespace WebApplication_Drone.Services
                 await Task.WhenAll(loadTasks);
                 
                 // 原子性更新内存数据
-                lock (_lock)
+                lock (_rwLock)
                 {
                     _tasks.Clear();
-                    _tasks.AddRange(allTasks);
+                    foreach (var task in allTasks)
+                    {
+                        _tasks.TryAdd(task.Id, task);
+                    }
                 }
                 
                 _logger.LogInformation("分批加载完成，总计 {MainTaskCount} 个主任务，{SubTaskCount} 个子任务", 
@@ -629,9 +868,9 @@ namespace WebApplication_Drone.Services
             try
             {
                 List<MainTask> tasksToSync;
-                lock (_lock)
+                lock (_rwLock)
                 {
-                    tasksToSync = _tasks.ToList();
+                    tasksToSync = _tasks.Values.ToList();
                 }
 
                 foreach (var task in tasksToSync)
@@ -675,11 +914,11 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public TaskStatistics GetTaskStatistics()
         {
-            lock (_lock)
+            lock (_rwLock)
             {
                 var stats = new TaskStatistics();
                 
-                foreach (var task in _tasks)
+                foreach (var task in _tasks.Values)
                 {
                     stats.TotalMainTasks++;
                     stats.TotalSubTasks += task.SubTasks.Count;
@@ -728,13 +967,31 @@ namespace WebApplication_Drone.Services
         }
 
         /// <summary>
+        /// 获取服务性能统计 - 用于系统监控
+        /// </summary>
+        public TaskServiceStatistics GetStatistics()
+        {
+            return new TaskServiceStatistics
+            {
+                TotalTasks = _tasks.Count,
+                TotalOperations = _totalOperations,
+                CacheHitRate = _totalOperations > 0 ? (double)_cacheHits / _totalOperations : 0,
+                CacheHits = _cacheHits,
+                CacheMisses = _cacheMisses,
+                ActiveTasks = _tasks.Values.Count(t => t.Status == TaskStatus.Running || t.Status == TaskStatus.WaitingToRun),
+                CompletedTasks = _tasks.Values.Count(t => t.Status == TaskStatus.RanToCompletion),
+                LastUpdateTime = DateTime.UtcNow
+            };
+        }
+
+        /// <summary>
         /// 根据状态获取主任务
         /// </summary>
         public List<MainTask> GetTasksByStatus(TaskStatus status)
         {
-            lock (_lock)
+            lock (_rwLock)
             {
-                return _tasks.Where(t => t.Status == status).ToList();
+                return _tasks.Values.Where(t => t.Status == status).ToList();
             }
         }
 
@@ -743,10 +1000,10 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public List<SubTask> GetActiveSubTasksForDrone(string droneName)
         {
-            lock (_lock)
+            lock (_rwLock)
             {
                 var activeTasks = new List<SubTask>();
-                foreach (var mainTask in _tasks)
+                foreach (var mainTask in _tasks.Values)
                 {
                     var droneSubTasks = mainTask.SubTasks
                         .Where(st => st.AssignedDrone == droneName && 
@@ -761,16 +1018,17 @@ namespace WebApplication_Drone.Services
         /// <summary>
         /// 批量更新子任务状态
         /// </summary>
-        public async Task<int> BatchUpdateSubTaskStatusAsync(List<Guid> subTaskIds, TaskStatus newStatus, string reason = null)
+        public async Task<int> BatchUpdateSubTaskStatusAsync(List<Guid> subTaskIds, TaskStatus newStatus, string? reason = null)
         {
             var updatedCount = 0;
             
-            lock (_lock)
+            lock (_rwLock)
             {
                 foreach (var subTaskId in subTaskIds)
                 {
-                    foreach (var mainTask in _tasks)
+                    if (_tasks.ContainsKey(subTaskId))
                     {
+                        var mainTask = _tasks[subTaskId];
                         var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
                         if (subTask != null)
                         {
@@ -809,10 +1067,10 @@ namespace WebApplication_Drone.Services
         {
             var cutoffTime = DateTime.Now - timeout;
             
-            lock (_lock)
+            lock (_rwLock)
             {
                 var expiredTasks = new List<SubTask>();
-                foreach (var mainTask in _tasks)
+                foreach (var mainTask in _tasks.Values)
                 {
                     var expired = mainTask.SubTasks
                         .Where(st => st.Status == TaskStatus.Running && 
@@ -832,9 +1090,9 @@ namespace WebApplication_Drone.Services
         {
             var reassignedCount = 0;
             
-            lock (_lock)
+            lock (_rwLock)
             {
-                foreach (var mainTask in _tasks)
+                foreach (var mainTask in _tasks.Values)
                 {
                     var failedSubTasks = mainTask.SubTasks
                         .Where(st => st.Status == TaskStatus.Faulted && st.ReassignmentCount < 3)
@@ -877,9 +1135,9 @@ namespace WebApplication_Drone.Services
             var cutoffTime = DateTime.Now - maxAge;
             var cleanedCount = 0;
             
-            lock (_lock)
+            lock (_rwLock)
             {
-                var tasksToRemove = _tasks
+                var tasksToRemove = _tasks.Values
                     .Where(t => t.Status == TaskStatus.RanToCompletion && 
                                t.CompletedTime.HasValue && 
                                t.CompletedTime.Value < cutoffTime)
@@ -887,7 +1145,7 @@ namespace WebApplication_Drone.Services
                 
                 foreach (var task in tasksToRemove)
                 {
-                    _tasks.Remove(task);
+                    _tasks.TryRemove(task.Id, out _);
                     cleanedCount++;
                     
                     // 异步删除数据库记录 - 使用任务ID快照
@@ -914,12 +1172,12 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public TaskPerformanceAnalysis GetTaskPerformanceAnalysis()
         {
-            lock (_lock)
+            lock (_rwLock)
             {
                 var analysis = new TaskPerformanceAnalysis();
                 var completedSubTasks = new List<SubTask>();
                 
-                foreach (var mainTask in _tasks)
+                foreach (var mainTask in _tasks.Values)
                 {
                     completedSubTasks.AddRange(
                         mainTask.SubTasks.Where(st => st.Status == TaskStatus.RanToCompletion && 
@@ -952,12 +1210,12 @@ namespace WebApplication_Drone.Services
         /// <returns>返回更新成功与否</returns>
         public bool UpdateSubTaskImage(Guid mainTaskId, string subTaskDescription, string imagePath)
         {
-            lock (_lock)
+            lock (_rwLock)
             {
-                var task = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
-                if (task != null)
+                if (_tasks.ContainsKey(mainTaskId))
                 {
-                    var subTask = task.SubTasks.FirstOrDefault(st => st.Description == subTaskDescription);
+                    var mainTask = _tasks[mainTaskId];
+                    var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Description == subTaskDescription);
                     if (subTask != null)
                     {
                         // 添加新图片路径到列表中
@@ -965,10 +1223,10 @@ namespace WebApplication_Drone.Services
                         {
                             subTask.ImagePaths.Add(imagePath);
                         }
-                        OnDroneChanged("SubTaskImageUpdated", task);
+                        OnTaskChanged("SubTaskImageUpdated", mainTask);
 
                         // 异步同步到数据库
-                        var taskSnapshot = CloneTask(task);
+                        var taskSnapshot = CloneTask(mainTask);
                         _ = Task.Run(async () =>
                         {
                             try
@@ -999,12 +1257,12 @@ namespace WebApplication_Drone.Services
         /// <returns>返回更新成功与否</returns>
         public bool AddSubTaskImages(Guid mainTaskId, string subTaskDescription, List<string> imagePaths)
         {
-            lock (_lock)
+            lock (_rwLock)
             {
-                var task = _tasks.FirstOrDefault(t => t.Id == mainTaskId);
-                if (task != null)
+                if (_tasks.ContainsKey(mainTaskId))
                 {
-                    var subTask = task.SubTasks.FirstOrDefault(st => st.Description == subTaskDescription);
+                    var mainTask = _tasks[mainTaskId];
+                    var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Description == subTaskDescription);
                     if (subTask != null)
                     {
                         // 批量添加图片路径，避免重复
@@ -1015,10 +1273,10 @@ namespace WebApplication_Drone.Services
                                 subTask.ImagePaths.Add(imagePath);
                             }
                         }
-                        OnDroneChanged("SubTaskImagesUpdated", task);
+                        OnTaskChanged("SubTaskImagesUpdated", mainTask);
 
                         // 异步同步到数据库
-                        var taskSnapshot = CloneTask(task);
+                        var taskSnapshot = CloneTask(mainTask);
                         _ = Task.Run(async () =>
                         {
                             try
@@ -1039,8 +1297,6 @@ namespace WebApplication_Drone.Services
                 return false;
             }
         }
-
-
 
         /// <summary>
         /// 为所有子任务加载图片元数据（不包含二进制数据）
@@ -1101,9 +1357,9 @@ namespace WebApplication_Drone.Services
                 // 从数据库获取包含二进制数据的完整图片信息
                 var fullImages = new List<SubTaskImage>();
                 
-                lock (_lock)
+                lock (_rwLock)
                 {
-                    var mainTask = _tasks.FirstOrDefault(t => t.SubTasks.Any(st => st.Id == subTaskId));
+                    var mainTask = _tasks.Values.FirstOrDefault(t => t.SubTasks.Any(st => st.Id == subTaskId));
                     if (mainTask != null)
                     {
                         var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
@@ -1141,6 +1397,31 @@ namespace WebApplication_Drone.Services
                 return new List<SubTaskImage>();
             }
         }
+
+        #region IDisposable Implementation
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposed)
+            {
+                if (disposing)
+                {
+                    // Dispose managed resources
+                    _rwLock.Dispose();
+                }
+
+                // Dispose unmanaged resources
+                _disposed = true;
+            }
+        }
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        #endregion
     }
 
     /// <summary>
@@ -1149,8 +1430,9 @@ namespace WebApplication_Drone.Services
     public class TaskChangedEventArgs : EventArgs
     {
         public string Action { get; set; } = "";
-        public MainTask MainTask { get; set; }
+        public MainTask MainTask { get; set; } = null!;
         public SubTask SubTask { get; set; } = new SubTask();
+        public DateTime Timestamp { get; set; }
     }
 }
 

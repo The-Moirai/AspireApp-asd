@@ -15,7 +15,7 @@ namespace WebApplication_Drone.Services
     public class MissionSocketService
     {
         private readonly ManualResetEvent _stopEvent = new ManualResetEvent(false);
-        private TcpListener _listener;
+        private TcpListener? _listener;
         private readonly List<TcpClient> _clients = new();
         private readonly TaskDataService _taskDataService;
         private readonly DroneDataService _droneDataService;
@@ -524,7 +524,7 @@ namespace WebApplication_Drone.Services
         /// <summary>
         /// 处理单张图片（带头消息）
         /// </summary>
-        private async Task ProcessSingleImageWithHeader(MessageFromNode message, NetworkStream stream, byte[] remainingData = null)
+        private async Task ProcessSingleImageWithHeader(MessageFromNode message, NetworkStream stream, byte[]? remainingData = null)
         {
             try
             {
@@ -678,7 +678,7 @@ namespace WebApplication_Drone.Services
         /// 注意：image_data消息只是一个头消息，实际的图片数据会通过后续的single_image消息发送
         /// 警告：此协议已废弃，请使用single_image协议
         /// </summary>
-        private async Task ProcessImageDataDirect(MessageFromNode message, NetworkStream stream, byte[] preloadedData = null)
+        private async Task ProcessImageDataDirect(MessageFromNode message, NetworkStream stream, byte[]? preloadedData = null)
         {
             _logger.LogWarning("⚠️ image_data协议已废弃，建议使用single_image协议");
             
@@ -823,7 +823,7 @@ namespace WebApplication_Drone.Services
         /// <summary>
         /// 保存图片到数据库和文件系统
         /// </summary>
-        private async Task<(string imagePath, Guid imageId)> SaveImageToDatabase(NetworkStream stream, string taskId, string subtaskName, int imageIndex, string fileName, long fileSize, byte[] preloadedData = null)
+        private async Task<(string imagePath, Guid imageId)> SaveImageToDatabase(NetworkStream stream, string taskId, string subtaskName, int imageIndex, string fileName, long fileSize, byte[]? preloadedData = null)
         {
             try
             {
@@ -1088,7 +1088,7 @@ namespace WebApplication_Drone.Services
         /// <summary>
         /// 根据头消息信息保存图片文件（保留向后兼容）
         /// </summary>
-        private async Task<string> SaveImageFromHeaderInfo(NetworkStream stream, string taskId, string subtaskName, int imageIndex, string fileName, long fileSize, byte[] preloadedData = null)
+        private async Task<string> SaveImageFromHeaderInfo(NetworkStream stream, string taskId, string subtaskName, int imageIndex, string fileName, long fileSize, byte[]? preloadedData = null)
         {
             try
             {
