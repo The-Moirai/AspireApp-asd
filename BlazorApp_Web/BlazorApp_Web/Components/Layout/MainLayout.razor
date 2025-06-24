@@ -1,4 +1,6 @@
 ﻿@inherits LayoutComponentBase
+@using Microsoft.JSInterop
+@inject IJSRuntime JSRuntime
 
 <div class="app-layout">
     <!-- 顶部导航栏 -->
@@ -51,12 +53,37 @@
         </div>
     </main>
 
-    <!-- 页面加载指示器 -->
-    <div class="page-loading" id="page-loading">
-        <div class="loading-spinner">
-            <div class="spinner"></div>
-            <span>加载中...</span>
+    <!-- 全局加载指示器 -->
+    <div class="global-loading @(isPageLoading ? "active" : "")" id="global-loading">
+        <div class="loading-backdrop"></div>
+        <div class="loading-container">
+            <div class="loading-content">
+                <!-- 无人机动画 -->
+                <div class="drone-loading">
+                    <div class="drone-body">
+                        <i class="bi bi-robot"></i>
+                    </div>
+                    <div class="propeller propeller-1"></div>
+                    <div class="propeller propeller-2"></div>
+                    <div class="propeller propeller-3"></div>
+                    <div class="propeller propeller-4"></div>
+                </div>
+                
+                <!-- 加载文本和进度 -->
+                <div class="loading-text">
+                    <h4>@loadingMessage</h4>
+                    <div class="loading-progress">
+                        <div class="progress-bar" style="width: @(loadingProgress)%"></div>
+                    </div>
+                    <p class="loading-subtitle">@loadingSubtitle</p>
+                </div>
+            </div>
         </div>
+    </div>
+
+    <!-- 顶部进度条 -->
+    <div class="top-loading-bar @(isNavigating ? "active" : "")" id="top-loading-bar">
+        <div class="loading-line"></div>
     </div>
 </div>
 
@@ -67,13 +94,105 @@
         <span>系统发生错误，请刷新页面重试</span>
         <div class="error-actions">
             <a href="" class="reload-btn">刷新页面</a>
-            <a class="dismiss-btn">关闭</a>
+            <a class="dismiss-btn" @onclick="DismissError">关闭</a>
         </div>
     </div>
 </div>
 
 @code {
     private bool isSidebarCollapsed = false;
+    private bool isPageLoading = true;
+    private bool isNavigating = false;
+    private string loadingMessage = "正在启动系统...";
+    private string loadingSubtitle = "请稍候，正在加载必要组件";
+    private int loadingProgress = 0;
+    private Timer? loadingTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // 模拟渐进式加载过程
+        await SimulateLoadingProgress();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // 等待所有资源加载完成
+            await Task.Delay(300);
+            await HidePageLoading();
+        }
+    }
+
+    private async Task SimulateLoadingProgress()
+    {
+        var stages = new[]
+        {
+            ("正在连接服务器...", "建立安全连接", 20),
+            ("正在加载系统组件...", "初始化用户界面", 40),
+            ("正在验证用户权限...", "检查访问权限", 60),
+            ("正在加载数据...", "获取最新信息", 80),
+            ("启动完成", "欢迎使用智能无人机管理系统", 100)
+        };
+
+        foreach (var (message, subtitle, progress) in stages)
+        {
+            loadingMessage = message;
+            loadingSubtitle = subtitle;
+            loadingProgress = progress;
+            StateHasChanged();
+            await Task.Delay(400);
+        }
+    }
+
+    private async Task HidePageLoading()
+    {
+        try
+        {
+            await Task.Delay(800); // 让用户看到100%完成状态
+            isPageLoading = false;
+            StateHasChanged();
+            
+            // 使用JavaScript添加淡出动画
+            await JSRuntime.InvokeVoidAsync("hidePageLoading");
+        }
+        catch (Exception)
+        {
+            // 如果JavaScript调用失败，直接隐藏
+            isPageLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    public async Task ShowNavigationLoading()
+    {
+        isNavigating = true;
+        StateHasChanged();
+        await Task.Delay(1000); // 模拟导航加载时间
+        isNavigating = false;
+        StateHasChanged();
+    }
+
+    public async Task ShowGlobalLoading(string message = "正在处理...", string subtitle = "请稍候")
+    {
+        loadingMessage = message;
+        loadingSubtitle = subtitle;
+        loadingProgress = 0;
+        isPageLoading = true;
+        StateHasChanged();
+        
+        // 模拟进度
+        for (int i = 0; i <= 100; i += 10)
+        {
+            loadingProgress = i;
+            StateHasChanged();
+            await Task.Delay(100);
+        }
+        
+        await Task.Delay(300);
+        isPageLoading = false;
+        StateHasChanged();
+    }
 
     private void ToggleSidebar()
     {
@@ -81,20 +200,13 @@
         StateHasChanged();
     }
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    private async Task DismissError()
     {
-        if (firstRender)
-        {
-            await Task.Delay(500); // 模拟加载时间
-            await HidePageLoading();
-        }
+        await JSRuntime.InvokeVoidAsync("dismissBlazorError");
     }
 
-    private async Task HidePageLoading()
+    public void Dispose()
     {
-        await Task.Run(() => 
-        {
-            // 隐藏页面加载指示器的逻辑
-        });
+        loadingTimer?.Dispose();
     }
 }

@@ -146,11 +146,54 @@ else
 
         hubConnection.On<List<Drone>>("ReceiveDronesPosition", ds =>
         {
-            drones = ds;
-            InvokeAsync(StateHasChanged);
+            // 避免重复渲染和数据重复
+            if (ShouldUpdateDrones(ds))
+            {
+                drones = ds?.Distinct().ToList() ?? new List<Drone>();
+                UpdateVisibleDrones();
+                InvokeAsync(StateHasChanged);
+            }
         });
         await hubConnection.StartAsync();
     }
+
+    /// <summary>
+    /// 检查是否需要更新无人机数据
+    /// </summary>
+    /// <param name="newDrones"></param>
+    /// <returns></returns>
+    private bool ShouldUpdateDrones(List<Drone>? newDrones)
+    {
+        if (newDrones == null || !newDrones.Any()) return false;
+        
+        // 如果数量不同，需要更新
+        if (drones.Count != newDrones.Count) return true;
+        
+        // 检查是否有数据变化
+        var existingDroneIds = drones.Select(d => d.Id).ToHashSet();
+        var newDroneIds = newDrones.Select(d => d.Id).ToHashSet();
+        
+        // 如果ID集合不同，需要更新
+        if (!existingDroneIds.SetEquals(newDroneIds)) return true;
+        
+        // 检查位置或状态是否有变化
+        foreach (var newDrone in newDrones)
+        {
+            var existingDrone = drones.FirstOrDefault(d => d.Id == newDrone.Id);
+            if (existingDrone != null)
+            {
+                if (existingDrone.Status != newDrone.Status ||
+                    existingDrone.CurrentPosition?.Latitude_x != newDrone.CurrentPosition?.Latitude_x ||
+                    existingDrone.CurrentPosition?.Longitude_y != newDrone.CurrentPosition?.Longitude_y)
+                {
+                    return true;
+                }
+            }
+        }
+        
+        return false;
+    }
+
     /// <summary>
     /// 状态颜色映射
     /// </summary>

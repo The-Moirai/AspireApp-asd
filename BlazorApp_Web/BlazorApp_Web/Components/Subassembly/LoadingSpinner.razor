@@ -1,0 +1,126 @@
+@using Microsoft.JSInterop
+@inject IJSRuntime JSRuntime
+
+<div class="loading-spinner-component @(IsVisible ? "visible" : "") @CssClass" style="@Style">
+    @if (ShowBackdrop)
+    {
+        <div class="spinner-backdrop" @onclick="OnBackdropClick"></div>
+    }
+    
+    <div class="spinner-container">
+        @if (SpinnerType == SpinnerTypes.Drone)
+        {
+            <!-- 无人机加载动画 -->
+            <div class="mini-drone-loading">
+                <div class="mini-drone-body">
+                    <i class="bi bi-robot"></i>
+                </div>
+                <div class="mini-propeller mini-propeller-1"></div>
+                <div class="mini-propeller mini-propeller-2"></div>
+                <div class="mini-propeller mini-propeller-3"></div>
+                <div class="mini-propeller mini-propeller-4"></div>
+            </div>
+        }
+        else if (SpinnerType == SpinnerTypes.Dots)
+        {
+            <!-- 点点点加载动画 -->
+            <div class="dots-loading">
+                <div class="dot"></div>
+                <div class="dot"></div>
+                <div class="dot"></div>
+            </div>
+        }
+        else if (SpinnerType == SpinnerTypes.Circle)
+        {
+            <!-- 圆圈加载动画 -->
+            <div class="circle-loading">
+                <div class="circle-spinner"></div>
+            </div>
+        }
+        else if (SpinnerType == SpinnerTypes.Pulse)
+        {
+            <!-- 脉冲加载动画 -->
+            <div class="pulse-loading">
+                <div class="pulse-dot"></div>
+                <div class="pulse-dot"></div>
+                <div class="pulse-dot"></div>
+            </div>
+        }
+        
+        @if (!string.IsNullOrEmpty(Message))
+        {
+            <div class="spinner-message">
+                <span class="message-text">@Message</span>
+                @if (ShowProgress && Progress.HasValue)
+                {
+                    <div class="mini-progress">
+                        <div class="mini-progress-bar" style="width: @(Progress.Value)%"></div>
+                    </div>
+                    <span class="progress-text">@(Progress.Value)%</span>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public bool IsVisible { get; set; } = true;
+    [Parameter] public string Message { get; set; } = string.Empty;
+    [Parameter] public SpinnerTypes SpinnerType { get; set; } = SpinnerTypes.Circle;
+    [Parameter] public bool ShowBackdrop { get; set; } = false;
+    [Parameter] public bool ShowProgress { get; set; } = false;
+    [Parameter] public int? Progress { get; set; }
+    [Parameter] public string CssClass { get; set; } = string.Empty;
+    [Parameter] public string Style { get; set; } = string.Empty;
+    [Parameter] public EventCallback OnBackdropClick { get; set; }
+
+    public enum SpinnerTypes
+    {
+        Circle,
+        Dots,
+        Drone,
+        Pulse
+    }
+
+    public async Task Show(string message = "", SpinnerTypes? type = null)
+    {
+        if (!string.IsNullOrEmpty(message))
+            Message = message;
+        
+        if (type.HasValue)
+            SpinnerType = type.Value;
+            
+        IsVisible = true;
+        StateHasChanged();
+        await Task.Delay(50); // 确保DOM更新
+    }
+
+    public async Task Hide(int delay = 0)
+    {
+        if (delay > 0)
+            await Task.Delay(delay);
+            
+        IsVisible = false;
+        StateHasChanged();
+    }
+
+    public async Task UpdateProgress(int progressValue, string? newMessage = null)
+    {
+        Progress = Math.Max(0, Math.Min(100, progressValue));
+        
+        if (!string.IsNullOrEmpty(newMessage))
+            Message = newMessage;
+            
+        StateHasChanged();
+        await Task.Delay(50);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && IsVisible)
+        {
+            // 可以在这里添加淡入动画
+            await Task.Delay(100);
+        }
+    }
+} 

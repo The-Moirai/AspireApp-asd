@@ -388,6 +388,11 @@ namespace WebApplication_Drone.Services
             return GetDroneAsync(id).GetAwaiter().GetResult();
         }
 
+        public Drone? GetDroneByName(string droneName)
+        {
+            return GetDroneByNameAsync(droneName).GetAwaiter().GetResult();
+        }
+
         public async void SetDrones(IEnumerable<Drone> drones)
         {
             await SetDronesAsync(drones);
