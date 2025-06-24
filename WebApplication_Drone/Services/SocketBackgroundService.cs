@@ -31,8 +31,8 @@ public class SocketBackgroundService : BackgroundService
             _logger.LogInformation("图片数据将按需从数据库实时加载");
             
             // 启动MissionSocketService (图片接收服务)
-            _logger.LogInformation("启动 MissionSocketService 在端口 5010...");
-            await _missionsocketService.StartAsync(5010);
+            _logger.LogInformation("启动 MissionSocketService 在端口 5009...");
+            await _missionsocketService.StartAsync(5009);
             
             // 启动SocketService (连接到Linux端)
             _logger.LogInformation("连接到 Linux 端 192.168.31.35:5007...");

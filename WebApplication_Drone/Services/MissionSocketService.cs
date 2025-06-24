@@ -350,7 +350,7 @@ namespace WebApplication_Drone.Services
                     if (TryParseJsonFromBuffer(jsonBuffer, out var jsonMessage, out int bytesConsumed))
                     {
                         // 计算剩余的二进制数据
-                        var remainingData = jsonBuffer.Skip(bytesConsumed).ToArray();
+                        var remainingData = jsonBuffer.Skip(bytesConsumed+1).ToArray();
                         
                         _logger.LogDebug("✅ JSON解析成功，消息长度: {JsonLength}, 剩余数据: {RemainingBytes} 字节", 
                             jsonMessage.Length, remainingData.Length);

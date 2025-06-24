@@ -301,136 +301,6 @@
             </div>
         </div>
     }
-
-    <!-- 任务管理标签页 -->
-    @if (activeTab == "tasks")
-    {
-        <div class="tab-content">
-            @if (tasks == null)
-            {
-                <div class="text-center py-4">
-                    <div class="spinner-border" role="status">
-                        <span class="visually-hidden">加载中...</span>
-                    </div>
-                    <p class="mt-2">正在加载任务数据...</p>
-                </div>
-            }
-            else
-            {
-                <div class="row mb-3">
-                    <div class="col-12">
-                        <button class="btn btn-primary" @onclick="ShowVideoTaskForm">
-                            <i class="bi bi-plus-circle"></i> 创建视频任务
-                        </button>
-                    </div>
-                </div>
-
-                <div class="row">
-                    <div class="col-12">
-                        <div class="card">
-                            <div class="card-header">
-                                <h5 class="card-title mb-0">
-                                    <i class="bi bi-list-task"></i> 视频处理任务列表
-                                </h5>
-                            </div>
-                            <div class="card-body">
-                                <div class="table-responsive">
-                                    <table class="table table-hover">
-                                        <thead>
-                                            <tr>
-                                                <th>任务ID</th>
-                                                <th>描述</th>
-                                                <th>状态</th>
-                                                <th>创建时间</th>
-                                                <th>子任务数</th>
-                                                <th>操作</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            @foreach (var task in tasks)
-                                            {
-                                                var activeSubTaskCount = GetActiveSubTaskCount(task);
-                                                <tr>
-                                                    <td>@task.Id.ToString("N")[..8]</td>
-                                                    <td>@task.Description</td>
-                                                    <td>
-                                                        <span class="badge @GetTaskStatusBadge(task.Status)">
-                                                            @GetTaskStatusText(task.Status)
-                                                        </span>
-                                                    </td>
-                                                    <td>@task.CreationTime.ToString("yyyy-MM-dd HH:mm")</td>
-                                                    <td>@activeSubTaskCount</td>
-                                                    <td>
-                                                        <button class="btn btn-sm btn-outline-info" @onclick="() => ToggleSubTasks(task.Id)">
-                                                            <i class="bi bi-@(expandedTaskId == task.Id ? "chevron-up" : "chevron-down")"></i>
-                                                            @(expandedTaskId == task.Id ? "收起" : "查看子任务")
-                                                        </button>
-                                                    </td>
-                                                </tr>
-                                                @if (expandedTaskId == task.Id && task.SubTasks != null)
-                                                {
-                                                    var activeSubTasks = GetActiveSubTasks(task);
-                                                    <tr>
-                                                        <td colspan="6">
-                                                            <div class="p-3 bg-light">
-                                                                <h6>子任务详情</h6>
-                                                                <table class="table table-sm table-striped">
-                                                                    <thead>
-                                                                        <tr>
-                                                                            <th>子任务ID</th>
-                                                                            <th>描述</th>
-                                                                            <th>状态</th>
-                                                                            <th>分配无人机</th>
-                                                                            <th>分配时间</th>
-                                                                            <th>完成时间</th>
-                                                                                                                                        <th>操作</th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody>
-                                                        @foreach (var sub in activeSubTasks)
-                                                        {
-                                                            <tr>
-                                                                <td>@sub.Id.ToString("N")[..8]</td>
-                                                                <td>@sub.Description</td>
-                                                                <td>
-                                                                    <span class="badge @GetTaskStatusBadge(sub.Status)">
-                                                                        @GetTaskStatusText(sub.Status)
-                                                                    </span>
-                                                                </td>
-                                                                <td>@sub.AssignedDrone</td>
-                                                                <td>@(sub.AssignedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
-                                                                <td>@(sub.CompletedTime?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
-                                                                <td>
-                                                                    @if (sub.GetTotalImageCount() > 0)
-                                                                    {
-                                                                        <button class="btn btn-sm btn-outline-primary" @onclick="() => ViewSubTaskImage(sub)">
-                                                                            <i class="bi bi-images"></i> 查看图片 (@sub.GetTotalImageCount())
-                                                                        </button>
-                                                                    }
-                                                                    else
-                                                                    {
-                                                                        <span class="text-muted">无图片</span>
-                                                                    }
-                                                                </td>
-                                                            </tr>
-                                                        }
-                                                                    </tbody>
-                                                                </table>
-                                                            </div>
-                                                        </td>
-                                                    </tr>
-                                                }
-                                            }
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            }
-        </div>
-    }
 </div>
 
 <!-- 模态框：创建视频处理任务 -->
@@ -560,7 +430,7 @@
                                 {
                                     <!-- 单张图片直接显示 -->
                                     <div class="text-center">
-                                        <img src="@allImageUrls[0]" 
+                                        <img src="@currentImageUrls[0]" 
                                              class="img-fluid rounded border" 
                                              alt="子任务处理结果图片" 
                                              style="max-height: 400px;" />
@@ -571,7 +441,7 @@
                                     <!-- 多张图片轮播显示 -->
                                     <div id="imageCarousel" class="carousel slide" data-bs-ride="carousel">
                                         <div class="carousel-indicators">
-                                            @for (int i = 0; i < allImageUrls.Count; i++)
+                                            @for (int i = 0; i < currentImageUrls.Count; i++)
                                             {
                                                 var index = i;
                                                 <button type="button" data-bs-target="#imageCarousel" data-bs-slide-to="@index" 
@@ -580,17 +450,17 @@
                                             }
                                         </div>
                                         <div class="carousel-inner">
-                                            @for (int i = 0; i < allImageUrls.Count; i++)
+                                            @for (int i = 0; i < currentImageUrls.Count; i++)
                                             {
                                                 var index = i;
                                                 <div class="carousel-item @(index == 0 ? "active" : "")">
                                                     <div class="text-center">
-                                                        <img src="@allImageUrls[index]" 
+                                                        <img src="@currentImageUrls[index]" 
                                                              class="img-fluid rounded border" 
                                                              alt="子任务处理结果图片 @(index + 1)" 
                                                              style="max-height: 400px;" />
                                                         <div class="carousel-caption d-none d-md-block">
-                                                            <h5>图片 @(index + 1) / @allImageUrls.Count</h5>
+                                                            <h5>图片 @(index + 1) / @currentImageUrls.Count</h5>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -1227,10 +1097,10 @@
             StateHasChanged();
 
             // 使用HttpClientFactory创建HttpClient
-            using var httpClient = HttpClientFactory.CreateClient();
+            using var httpClient = HttpClientFactory.CreateClient("ApiService");
             
             // 调用API获取图片列表
-            var apiUrl = $"http://localhost:5192/api/Tasks/subtask/{subTaskId}/images";
+            var apiUrl = $"api/Tasks/subtask/{subTaskId}/images";
             var response = await httpClient.GetAsync(apiUrl);
             
             if (response.IsSuccessStatusCode)
@@ -1254,7 +1124,7 @@
                             var imageId = idProperty.GetString();
                             if (!string.IsNullOrEmpty(imageId))
                             {
-                                currentImageUrls.Add($"http://localhost:5192/api/Tasks/images/{imageId}/view");
+                                currentImageUrls.Add($"https://apisercie-drone/api/Tasks/images/{imageId}/view");
                             }
                         }
                     }
