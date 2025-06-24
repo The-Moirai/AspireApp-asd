@@ -105,8 +105,9 @@
             imageDataUrl = "";
             StateHasChanged();
 
-            var httpClient = HttpClientFactory.CreateClient("ApiService");
-            var response = await httpClient.GetAsync($"api/Tasks/images/{ImageId.Value}/view");
+            // 使用本地代理控制器而不是直接调用远程API
+            var httpClient = HttpClientFactory.CreateClient();
+            var response = await httpClient.GetAsync($"api/ImageProxy/view/{ImageId.Value}");
 
             if (response.IsSuccessStatusCode)
             {

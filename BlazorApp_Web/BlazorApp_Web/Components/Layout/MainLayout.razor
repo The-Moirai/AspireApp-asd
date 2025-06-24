@@ -52,39 +52,6 @@
             @Body
         </div>
     </main>
-
-    <!-- 全局加载指示器 -->
-    <div class="global-loading @(isPageLoading ? "active" : "")" id="global-loading">
-        <div class="loading-backdrop"></div>
-        <div class="loading-container">
-            <div class="loading-content">
-                <!-- 无人机动画 -->
-                <div class="drone-loading">
-                    <div class="drone-body">
-                        <i class="bi bi-robot"></i>
-                    </div>
-                    <div class="propeller propeller-1"></div>
-                    <div class="propeller propeller-2"></div>
-                    <div class="propeller propeller-3"></div>
-                    <div class="propeller propeller-4"></div>
-                </div>
-                
-                <!-- 加载文本和进度 -->
-                <div class="loading-text">
-                    <h4>@loadingMessage</h4>
-                    <div class="loading-progress">
-                        <div class="progress-bar" style="width: @(loadingProgress)%"></div>
-                    </div>
-                    <p class="loading-subtitle">@loadingSubtitle</p>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 顶部进度条 -->
-    <div class="top-loading-bar @(isNavigating ? "active" : "")" id="top-loading-bar">
-        <div class="loading-line"></div>
-    </div>
 </div>
 
 <!-- 错误提示 -->
@@ -101,206 +68,6 @@
 
 @code {
     private bool isSidebarCollapsed = false;
-    private bool isPageLoading = true;
-    private bool isNavigating = false;
-    private string loadingMessage = "正在启动系统...";
-    private string loadingSubtitle = "请稍候，正在加载必要组件";
-    private int loadingProgress = 0;
-    private Timer? loadingTimer;
-    private Timer? forceHideTimer;
-
-    protected override async Task OnInitializedAsync()
-    {
-        // 启动备用定时器，确保加载动画最多显示8秒
-        forceHideTimer = new Timer(async _ => await ForceHideLoading(), null, TimeSpan.FromSeconds(8), Timeout.InfiniteTimeSpan);
-        
-        // 模拟渐进式加载过程
-        await SimulateLoadingProgress();
-    }
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (firstRender)
-        {
-            try
-            {
-                // 等待DOM完全渲染
-                await Task.Delay(800);
-                
-                // 确保所有资源加载完成后隐藏加载动画
-                await HidePageLoading();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"隐藏加载动画时出错: {ex.Message}");
-                // 如果出现异常，强制隐藏加载动画
-                await ForceHideLoading();
-            }
-        }
-    }
-
-    private async Task SimulateLoadingProgress()
-    {
-        var stages = new[]
-        {
-            ("正在连接服务器...", "建立安全连接", 20),
-            ("正在加载系统组件...", "初始化用户界面", 40),
-            ("正在验证用户权限...", "检查访问权限", 60),
-            ("正在加载数据...", "获取最新信息", 80),
-            ("启动完成", "欢迎使用智能无人机管理系统", 100)
-        };
-
-        foreach (var (message, subtitle, progress) in stages)
-        {
-            if (!isPageLoading) break; // 如果已经隐藏了，就退出
-            
-            loadingMessage = message;
-            loadingSubtitle = subtitle;
-            loadingProgress = progress;
-            StateHasChanged();
-            await Task.Delay(250); // 减少延迟时间
-        }
-    }
-
-    private async Task HidePageLoading()
-    {
-        if (!isPageLoading) return; // 防止重复调用
-        
-        try
-        {
-            // 显示完成状态一段时间
-            await Task.Delay(400);
-            
-            // 先尝试使用JavaScript平滑隐藏
-            bool jsSuccess = false;
-            try
-            {
-                await JSRuntime.InvokeVoidAsync("loadingHelpers.hidePageLoading");
-                jsSuccess = true;
-                Console.WriteLine("JavaScript隐藏加载动画成功");
-            }
-            catch (Exception jsEx)
-            {
-                Console.WriteLine($"JavaScript调用失败: {jsEx.Message}");
-            }
-            
-            // 无论JavaScript是否成功，都要更新Blazor状态
-            await Task.Delay(200);
-            isPageLoading = false;
-            StateHasChanged();
-            
-            // 清理定时器
-            forceHideTimer?.Dispose();
-            forceHideTimer = null;
-            
-            Console.WriteLine("Blazor状态已更新，加载动画应该已隐藏");
-            
-            // 如果JavaScript失败，使用DOM操作强制隐藏
-            if (!jsSuccess)
-            {
-                await ForceHideWithDOM();
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"隐藏页面加载动画失败: {ex.Message}");
-            await ForceHideLoading();
-        }
-    }
-
-    private async Task ForceHideWithDOM()
-    {
-        try
-        {
-            await JSRuntime.InvokeVoidAsync("eval", @"
-                const loading = document.getElementById('global-loading');
-                if (loading) {
-                    loading.classList.remove('active');
-                    loading.style.opacity = '0';
-                    loading.style.visibility = 'hidden';
-                    loading.style.display = 'none';
-                    console.log('强制隐藏加载动画成功');
-                }
-            ");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"DOM操作失败: {ex.Message}");
-        }
-    }
-
-    private async Task ForceHideLoading()
-    {
-        Console.WriteLine("执行强制隐藏加载动画");
-        isPageLoading = false;
-        
-        // 清理定时器
-        forceHideTimer?.Dispose();
-        forceHideTimer = null;
-        
-        StateHasChanged();
-        
-        // 使用DOM操作确保隐藏
-        await ForceHideWithDOM();
-    }
-
-    public async Task ShowNavigationLoading()
-    {
-        isNavigating = true;
-        StateHasChanged();
-        
-        try
-        {
-            await JSRuntime.InvokeVoidAsync("loadingHelpers.showNavigationLoading");
-        }
-        catch (Exception)
-        {
-            // JavaScript调用失败时的备用方案
-        }
-        
-        await Task.Delay(600); // 模拟导航加载时间
-        isNavigating = false;
-        StateHasChanged();
-        
-        try
-        {
-            await JSRuntime.InvokeVoidAsync("loadingHelpers.hideNavigationLoading");
-        }
-        catch (Exception)
-        {
-            // JavaScript调用失败时的备用方案
-        }
-    }
-
-    public async Task ShowGlobalLoading(string message = "正在处理...", string subtitle = "请稍候")
-    {
-        loadingMessage = message;
-        loadingSubtitle = subtitle;
-        loadingProgress = 0;
-        isPageLoading = true;
-        StateHasChanged();
-        
-        try
-        {
-            await JSRuntime.InvokeVoidAsync("loadingHelpers.showGlobalLoading", message, subtitle);
-        }
-        catch (Exception)
-        {
-            // JavaScript调用失败时的备用方案
-        }
-        
-        // 模拟进度
-        for (int i = 0; i <= 100; i += 25)
-        {
-            if (!isPageLoading) break;
-            loadingProgress = i;
-            StateHasChanged();
-            await Task.Delay(60);
-        }
-        
-        await Task.Delay(150);
-        await HidePageLoading();
-    }
 
     private void ToggleSidebar()
     {
@@ -312,18 +79,16 @@
     {
         try
         {
-            await JSRuntime.InvokeVoidAsync("loadingHelpers.dismissBlazorError");
+            await JSRuntime.InvokeVoidAsync("eval", @"
+                const errorElement = document.getElementById('blazor-error-ui');
+                if (errorElement) {
+                    errorElement.style.display = 'none';
+                }
+            ");
         }
         catch (Exception)
         {
             // JavaScript调用失败时的备用方案
         }
-    }
-
-    // 组件销毁时清理资源
-    public void Dispose()
-    {
-        loadingTimer?.Dispose();
-        forceHideTimer?.Dispose();
     }
 }
