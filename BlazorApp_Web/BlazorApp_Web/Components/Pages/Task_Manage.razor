@@ -1124,7 +1124,8 @@
                             var imageId = idProperty.GetString();
                             if (!string.IsNullOrEmpty(imageId))
                             {
-                                currentImageUrls.Add($"https://apisercie-drone/api/Tasks/images/{imageId}/view");
+                                // 使用相对URL，让Aspire服务发现自动解析
+                            currentImageUrls.Add($"/api/Tasks/images/{imageId}/view");
                             }
                         }
                     }

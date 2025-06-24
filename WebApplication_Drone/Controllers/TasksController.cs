@@ -2,6 +2,7 @@
 using ClassLibrary_Core.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Cors;
 using WebApplication_Drone.Services;
 
 namespace WebApplication_Drone.Controllers
@@ -200,14 +201,15 @@ namespace WebApplication_Drone.Controllers
         }
 
         /// <summary>
-        /// 获取图片内容（仅用于显示，不触发下载）
+        /// 获取图片内容（仅用于显示，不触发下载）- 优化缓存策略
         /// </summary>
         [HttpGet("images/{imageId:guid}/view")]
+        [EnableCors("ImagePolicy")]
         public async Task<IActionResult> ViewImage(Guid imageId)
         {
             try
             {
-                _logger.LogInformation("请求查看图片: ImageId={ImageId}", imageId);
+                _logger.LogDebug("请求查看图片: ImageId={ImageId}", imageId);
                 
                 var image = await _sqlserverService.GetSubTaskImageAsync(imageId);
                 if (image == null)
@@ -222,6 +224,26 @@ namespace WebApplication_Drone.Controllers
                     return NotFound();
                 }
 
+                // 添加强缓存策略，防止InteractiveServer重渲染时重新加载图片
+                var etag = $"\"{imageId}-{image.UploadTime.Ticks}\"";
+                Response.Headers.Add("Cache-Control", "public, max-age=86400, immutable"); // 缓存1天且不可变
+                Response.Headers.Add("ETag", etag);
+                Response.Headers.Add("Last-Modified", image.UploadTime.ToString("R"));
+                
+                // 检查条件请求头，如果客户端已有缓存则返回304
+                var ifNoneMatch = Request.Headers["If-None-Match"].FirstOrDefault();
+                var ifModifiedSince = Request.Headers["If-Modified-Since"].FirstOrDefault();
+                
+                if (ifNoneMatch == etag || 
+                    (DateTime.TryParse(ifModifiedSince, out var modifiedSince) && 
+                     image.UploadTime <= modifiedSince.AddSeconds(1))) // 允许1秒误差
+                {
+                    _logger.LogDebug("图片未修改，返回304: ImageId={ImageId}", imageId);
+                    return StatusCode(304); // Not Modified，浏览器使用缓存
+                }
+
+                _logger.LogDebug("返回图片内容: ImageId={ImageId}, Size={Size}字节", imageId, image.ImageData.Length);
+                
                 // 不设置Content-Disposition，让浏览器直接显示图片
                 return File(image.ImageData, image.ContentType);
             }

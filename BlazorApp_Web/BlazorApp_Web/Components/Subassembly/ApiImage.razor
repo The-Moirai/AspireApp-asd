@@ -1,0 +1,213 @@
+@using Microsoft.AspNetCore.Components
+@using Microsoft.JSInterop
+@inject IHttpClientFactory HttpClientFactory
+@inject IJSRuntime JSRuntime
+@inject ILogger<ApiImage> Logger
+
+<div class="api-image-container @CssClass" style="@ContainerStyle">
+    @if (isLoading)
+    {
+        <div class="image-loading-placeholder @PlaceholderCssClass" style="@PlaceholderStyle">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">加载中...</span>
+            </div>
+            <small class="text-muted mt-2">正在加载图片...</small>
+        </div>
+    }
+    else if (hasError)
+    {
+        <div class="image-error-placeholder @PlaceholderCssClass" style="@PlaceholderStyle">
+            <i class="bi bi-exclamation-triangle text-warning"></i>
+            <small class="text-muted mt-2">图片加载失败</small>
+            <button class="btn btn-sm btn-outline-primary mt-2" @onclick="RetryLoad">
+                <i class="bi bi-arrow-clockwise"></i> 重试
+            </button>
+        </div>
+    }
+    else if (!string.IsNullOrEmpty(imageDataUrl))
+    {
+        <img @ref="imageElement"
+             src="@imageDataUrl"
+             alt="@AltText"
+             class="@ImageCssClass"
+             style="@ImageStyle"
+             loading="lazy"
+             @onclick="OnImageClick" />
+    }
+    else if (ShowPlaceholder)
+    {
+        <div class="image-placeholder @PlaceholderCssClass" style="@PlaceholderStyle">
+            @if (!string.IsNullOrEmpty(PlaceholderText))
+            {
+                <span>@PlaceholderText</span>
+            }
+            else
+            {
+                <i class="bi bi-image"></i>
+                <small class="text-muted mt-2">暂无图片</small>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private ElementReference imageElement;
+    private bool isLoading = false;
+    private bool hasError = false;
+    private string imageDataUrl = "";
+    private string _lastImageId = "";
+
+    [Parameter] public Guid? ImageId { get; set; }
+    [Parameter] public string AltText { get; set; } = "API图片";
+    [Parameter] public string CssClass { get; set; } = "";
+    [Parameter] public string ImageCssClass { get; set; } = "img-fluid rounded border";
+    [Parameter] public string ContainerStyle { get; set; } = "";
+    [Parameter] public string ImageStyle { get; set; } = "max-height: 400px;";
+    [Parameter] public bool ShowPlaceholder { get; set; } = true;
+    [Parameter] public string PlaceholderText { get; set; } = "";
+    [Parameter] public string PlaceholderCssClass { get; set; } = "d-flex flex-column align-items-center justify-content-center bg-light border rounded";
+    [Parameter] public string PlaceholderStyle { get; set; } = "min-height: 200px; color: #6c757d;";
+    [Parameter] public EventCallback OnImageClick { get; set; }
+    [Parameter] public EventCallback<bool> OnLoadStateChanged { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var currentImageId = ImageId?.ToString() ?? "";
+        
+        // 只有当图片ID真正改变时才重新加载
+        if (currentImageId != _lastImageId)
+        {
+            _lastImageId = currentImageId;
+            
+            if (ImageId.HasValue && ImageId.Value != Guid.Empty)
+            {
+                await LoadImageAsync();
+            }
+            else
+            {
+                // 清空图片数据
+                imageDataUrl = "";
+                hasError = false;
+                isLoading = false;
+            }
+        }
+    }
+
+    private async Task LoadImageAsync()
+    {
+        if (!ImageId.HasValue || ImageId.Value == Guid.Empty)
+            return;
+
+        try
+        {
+            isLoading = true;
+            hasError = false;
+            imageDataUrl = "";
+            StateHasChanged();
+
+            var httpClient = HttpClientFactory.CreateClient("ApiService");
+            var response = await httpClient.GetAsync($"api/Tasks/images/{ImageId.Value}/view");
+
+            if (response.IsSuccessStatusCode)
+            {
+                var imageBytes = await response.Content.ReadAsByteArrayAsync();
+                var contentType = response.Content.Headers.ContentType?.MediaType ?? "image/png";
+                
+                // 转换为Data URL用于显示
+                var base64String = Convert.ToBase64String(imageBytes);
+                imageDataUrl = $"data:{contentType};base64,{base64String}";
+                
+                Logger.LogDebug("成功加载图片: ImageId={ImageId}, Size={Size}字节", ImageId.Value, imageBytes.Length);
+                await OnLoadStateChanged.InvokeAsync(true);
+            }
+            else
+            {
+                hasError = true;
+                Logger.LogWarning("图片加载失败: ImageId={ImageId}, StatusCode={StatusCode}", 
+                    ImageId.Value, response.StatusCode);
+                await OnLoadStateChanged.InvokeAsync(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            hasError = true;
+            Logger.LogError(ex, "图片加载异常: ImageId={ImageId}", ImageId.Value);
+            await OnLoadStateChanged.InvokeAsync(false);
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RetryLoad()
+    {
+        await LoadImageAsync();
+    }
+
+    // 预加载方法，可以在组件显示前调用
+    public async Task PreloadAsync()
+    {
+        if (!isLoading && string.IsNullOrEmpty(imageDataUrl) && ImageId.HasValue)
+        {
+            await LoadImageAsync();
+        }
+    }
+
+    // 清除缓存的图片数据
+    public void ClearCache()
+    {
+        imageDataUrl = "";
+        hasError = false;
+        isLoading = false;
+        _lastImageId = "";
+    }
+}
+
+<style>
+    .api-image-container {
+        position: relative;
+        overflow: hidden;
+    }
+
+    .api-image-container img {
+        transition: opacity 0.3s ease;
+        cursor: pointer;
+    }
+
+    .api-image-container img:hover {
+        opacity: 0.9;
+    }
+
+    .image-loading-placeholder,
+    .image-error-placeholder,
+    .image-placeholder {
+        border: 2px dashed #dee2e6;
+        border-radius: 0.375rem;
+        transition: border-color 0.3s ease;
+    }
+
+    .image-loading-placeholder {
+        border-color: #0d6efd;
+    }
+
+    .image-error-placeholder {
+        border-color: #ffc107;
+    }
+
+    .image-placeholder:hover {
+        border-color: #adb5bd;
+    }
+
+    .image-loading-placeholder i,
+    .image-error-placeholder i,
+    .image-placeholder i {
+        font-size: 2rem;
+    }
+
+    .spinner-border {
+        width: 2rem;
+        height: 2rem;
+    }
+</style> 

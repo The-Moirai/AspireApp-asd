@@ -1,7 +1,341 @@
 ﻿@page "/"
+@using Microsoft.AspNetCore.SignalR.Client
+@inject IHttpClientFactory HttpClientFactory
+@inject NavigationManager Navigation
+@inject ILogger<Home> Logger
+@implements IAsyncDisposable
 
-<PageTitle>Home</PageTitle>
+<PageTitle>智能无人机管理系统 - 首页</PageTitle>
 
-<h1>Hello, world!</h1>
+<div class="dashboard-home">
+    <!-- 欢迎横幅 -->
+    <div class="welcome-banner">
+        <div class="banner-content">
+            <div class="welcome-text">
+                <h1 class="welcome-title">欢迎使用智能无人机管理系统</h1>
+                <p class="welcome-subtitle">实时监控、智能调度、高效管理</p>
+                <div class="quick-stats">
+                    <span class="stat-item">
+                        <i class="bi bi-check-circle text-success"></i>
+                        系统运行正常
+                    </span>
+                    <span class="stat-item">
+                        <i class="bi bi-clock"></i>
+                        运行时间: @GetUptime()
+                    </span>
+                </div>
+            </div>
+            <div class="banner-animation">
+                <div class="drone-icon">
+                    <i class="bi bi-robot"></i>
+                </div>
+            </div>
+        </div>
+    </div>
 
-Welcome to your new app.
+    <!-- 统计卡片区域 -->
+    <div class="stats-grid">
+        <div class="stat-card primary">
+            <div class="stat-header">
+                <div class="stat-icon">
+                    <i class="bi bi-robot"></i>
+                </div>
+                <div class="stat-menu">
+                    <i class="bi bi-three-dots"></i>
+                </div>
+            </div>
+            <div class="stat-content">
+                <h3 class="stat-number">@totalDrones</h3>
+                <p class="stat-label">无人机总数</p>
+                <div class="stat-trend up">
+                    <i class="bi bi-arrow-up"></i>
+                    <span>+12%</span>
+                </div>
+            </div>
+            <div class="stat-footer">
+                <span class="active-count">@activeDrones 台在线</span>
+            </div>
+        </div>
+
+        <div class="stat-card success">
+            <div class="stat-header">
+                <div class="stat-icon">
+                    <i class="bi bi-kanban"></i>
+                </div>
+                <div class="stat-menu">
+                    <i class="bi bi-three-dots"></i>
+                </div>
+            </div>
+            <div class="stat-content">
+                <h3 class="stat-number">@totalTasks</h3>
+                <p class="stat-label">总任务数</p>
+                <div class="stat-trend up">
+                    <i class="bi bi-arrow-up"></i>
+                    <span>+8%</span>
+                </div>
+            </div>
+            <div class="stat-footer">
+                <span class="active-count">@activeTasks 个进行中</span>
+            </div>
+        </div>
+
+        <div class="stat-card warning">
+            <div class="stat-header">
+                <div class="stat-icon">
+                    <i class="bi bi-clock-history"></i>
+                </div>
+                <div class="stat-menu">
+                    <i class="bi bi-three-dots"></i>
+                </div>
+            </div>
+            <div class="stat-content">
+                <h3 class="stat-number">@completedTasks</h3>
+                <p class="stat-label">已完成任务</p>
+                <div class="stat-trend up">
+                    <i class="bi bi-arrow-up"></i>
+                    <span>+15%</span>
+                </div>
+            </div>
+            <div class="stat-footer">
+                <span class="active-count">今日完成 @todayCompleted 个</span>
+            </div>
+        </div>
+
+        <div class="stat-card info">
+            <div class="stat-header">
+                <div class="stat-icon">
+                    <i class="bi bi-graph-up"></i>
+                </div>
+                <div class="stat-menu">
+                    <i class="bi bi-three-dots"></i>
+                </div>
+            </div>
+            <div class="stat-content">
+                <h3 class="stat-number">98.5%</h3>
+                <p class="stat-label">系统可用性</p>
+                <div class="stat-trend up">
+                    <i class="bi bi-arrow-up"></i>
+                    <span>+0.3%</span>
+                </div>
+            </div>
+            <div class="stat-footer">
+                <span class="active-count">7天平均</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 主要功能区域 -->
+    <div class="main-sections">
+        <!-- 左侧：快速操作 -->
+        <div class="section-left">
+            <div class="card quick-actions-card">
+                <div class="card-header">
+                    <h5 class="card-title">
+                        <i class="bi bi-lightning"></i>
+                        快速操作
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="action-grid">
+                        <button class="action-btn" @onclick="@(() => Navigation.NavigateTo("/task_manage"))">
+                            <div class="action-icon">
+                                <i class="bi bi-plus-circle"></i>
+                            </div>
+                            <span class="action-text">创建任务</span>
+                        </button>
+                        
+                        <button class="action-btn" @onclick="@(() => Navigation.NavigateTo("/drone_map"))">
+                            <div class="action-icon">
+                                <i class="bi bi-geo-alt"></i>
+                            </div>
+                            <span class="action-text">查看地图</span>
+                        </button>
+                        
+                        <button class="action-btn" @onclick="@(() => Navigation.NavigateTo("/history-analysis"))">
+                            <div class="action-icon">
+                                <i class="bi bi-graph-up"></i>
+                            </div>
+                            <span class="action-text">数据分析</span>
+                        </button>
+                        
+                        <button class="action-btn">
+                            <div class="action-icon">
+                                <i class="bi bi-gear"></i>
+                            </div>
+                            <span class="action-text">系统设置</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 系统状态 -->
+            <div class="card system-status-card">
+                <div class="card-header">
+                    <h5 class="card-title">
+                        <i class="bi bi-speedometer2"></i>
+                        系统状态
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="status-items">
+                        <div class="status-item">
+                            <div class="status-label">
+                                <i class="bi bi-cpu"></i>
+                                CPU使用率
+                            </div>
+                            <div class="status-value">
+                                <span class="status-number">45%</span>
+                                <div class="progress-bar">
+                                    <div class="progress-fill" style="width: 45%"></div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="status-item">
+                            <div class="status-label">
+                                <i class="bi bi-memory"></i>
+                                内存使用
+                            </div>
+                            <div class="status-value">
+                                <span class="status-number">6.2GB</span>
+                                <div class="progress-bar">
+                                    <div class="progress-fill" style="width: 62%"></div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="status-item">
+                            <div class="status-label">
+                                <i class="bi bi-hdd"></i>
+                                磁盘空间
+                            </div>
+                            <div class="status-value">
+                                <span class="status-number">82%</span>
+                                <div class="progress-bar">
+                                    <div class="progress-fill warning" style="width: 82%"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧：最近活动和通知 -->
+        <div class="section-right">
+            <div class="card recent-activity-card">
+                <div class="card-header">
+                    <h5 class="card-title">
+                        <i class="bi bi-clock-history"></i>
+                        最近活动
+                    </h5>
+                    <button class="btn btn-sm btn-outline-primary">查看全部</button>
+                </div>
+                <div class="card-body">
+                    <div class="activity-list">
+                        <div class="activity-item">
+                            <div class="activity-icon success">
+                                <i class="bi bi-check-circle"></i>
+                            </div>
+                            <div class="activity-content">
+                                <p class="activity-text">任务 #001 已成功完成</p>
+                                <span class="activity-time">2分钟前</span>
+                            </div>
+                        </div>
+                        
+                        <div class="activity-item">
+                            <div class="activity-icon primary">
+                                <i class="bi bi-robot"></i>
+                            </div>
+                            <div class="activity-content">
+                                <p class="activity-text">无人机 Drone-05 已上线</p>
+                                <span class="activity-time">5分钟前</span>
+                            </div>
+                        </div>
+                        
+                        <div class="activity-item">
+                            <div class="activity-icon warning">
+                                <i class="bi bi-exclamation-triangle"></i>
+                            </div>
+                            <div class="activity-content">
+                                <p class="activity-text">检测到系统负载较高</p>
+                                <span class="activity-time">10分钟前</span>
+                            </div>
+                        </div>
+                        
+                        <div class="activity-item">
+                            <div class="activity-icon info">
+                                <i class="bi bi-info-circle"></i>
+                            </div>
+                            <div class="activity-content">
+                                <p class="activity-text">系统维护将于今晚进行</p>
+                                <span class="activity-time">1小时前</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private HubConnection? hubConnection;
+    private int totalDrones = 24;
+    private int activeDrones = 18;
+    private int totalTasks = 156;
+    private int activeTasks = 12;
+    private int completedTasks = 128;
+    private int todayCompleted = 8;
+    private DateTime startTime = DateTime.Now.AddDays(-7);
+
+    protected override async Task OnInitializedAsync()
+    {
+        // 初始化 SignalR 连接用于实时更新
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl(Navigation.ToAbsoluteUri("/droneHub"))
+            .Build();
+
+        hubConnection.On<string>("ReceiveMessage", (message) =>
+        {
+            InvokeAsync(StateHasChanged);
+        });
+
+        await hubConnection.StartAsync();
+        
+        // 加载统计数据
+        await LoadStatistics();
+    }
+
+    private async Task LoadStatistics()
+    {
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("ApiService");
+            
+            // 这里可以调用实际的API获取统计数据
+            // var stats = await httpClient.GetFromJsonAsync<SystemStats>("api/statistics");
+            
+            // 模拟数据加载
+            await Task.Delay(100);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "加载统计数据失败");
+        }
+    }
+
+    private string GetUptime()
+    {
+        var uptime = DateTime.Now - startTime;
+        return $"{uptime.Days}天 {uptime.Hours}小时";
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (hubConnection is not null)
+        {
+            await hubConnection.DisposeAsync();
+        }
+    }
+}

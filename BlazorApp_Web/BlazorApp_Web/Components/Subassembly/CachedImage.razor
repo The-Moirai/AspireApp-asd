@@ -1,0 +1,144 @@
+@using Microsoft.AspNetCore.Components
+@using Microsoft.JSInterop
+@inject IJSRuntime JSRuntime
+
+<div class="cached-image-container @CssClass" style="@ContainerStyle">
+    @if (!string.IsNullOrEmpty(ImageUrl))
+    {
+        <img @ref="imageElement"
+             src="@ImageUrl"
+             alt="@AltText"
+             class="@ImageCssClass"
+             style="@ImageStyle"
+             loading="lazy"
+             onload="@OnImageLoaded"
+             onerror="@OnImageError"
+             @onclick="OnImageClick" />
+    }
+    else if (ShowPlaceholder)
+    {
+        <div class="image-placeholder @PlaceholderCssClass" style="@PlaceholderStyle">
+            @if (!string.IsNullOrEmpty(PlaceholderText))
+            {
+                <span>@PlaceholderText</span>
+            }
+            else
+            {
+                <i class="bi bi-image"></i>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private ElementReference imageElement;
+    private bool isLoaded = false;
+    private bool hasError = false;
+
+    [Parameter] public string ImageUrl { get; set; } = "";
+    [Parameter] public string AltText { get; set; } = "";
+    [Parameter] public string CssClass { get; set; } = "";
+    [Parameter] public string ImageCssClass { get; set; } = "img-fluid";
+    [Parameter] public string ContainerStyle { get; set; } = "";
+    [Parameter] public string ImageStyle { get; set; } = "";
+    [Parameter] public bool ShowPlaceholder { get; set; } = true;
+    [Parameter] public string PlaceholderText { get; set; } = "";
+    [Parameter] public string PlaceholderCssClass { get; set; } = "d-flex align-items-center justify-content-center bg-light";
+    [Parameter] public string PlaceholderStyle { get; set; } = "min-height: 100px; color: #6c757d;";
+    [Parameter] public EventCallback OnImageClick { get; set; }
+    [Parameter] public EventCallback<bool> OnLoadStateChanged { get; set; }
+
+    // 缓存键，用于避免重复加载相同图片
+    private string _lastImageUrl = "";
+    private bool _isPreloading = false;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // 只有当图片URL真正改变时才重新加载
+        if (ImageUrl != _lastImageUrl && !string.IsNullOrEmpty(ImageUrl))
+        {
+            _lastImageUrl = ImageUrl;
+            await PreloadImageAsync();
+        }
+    }
+
+    private async Task PreloadImageAsync()
+    {
+        if (_isPreloading) return;
+        
+        try
+        {
+            _isPreloading = true;
+            
+            // 使用JavaScript预加载图片，利用浏览器缓存
+            await JSRuntime.InvokeVoidAsync("preloadImage", ImageUrl);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"图片预加载失败: {ex.Message}");
+        }
+        finally
+        {
+            _isPreloading = false;
+        }
+    }
+
+    private async Task OnImageLoaded()
+    {
+        isLoaded = true;
+        hasError = false;
+        await OnLoadStateChanged.InvokeAsync(true);
+    }
+
+    private async Task OnImageError()
+    {
+        isLoaded = false;
+        hasError = true;
+        await OnLoadStateChanged.InvokeAsync(false);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // 注册JavaScript函数
+            await JSRuntime.InvokeVoidAsync("eval", @"
+                window.preloadImage = function(url) {
+                    return new Promise((resolve, reject) => {
+                        const img = new Image();
+                        img.onload = () => resolve();
+                        img.onerror = () => reject();
+                        img.src = url;
+                    });
+                };
+                
+                window.getCachedImageUrl = function(url) {
+                    // 检查图片是否已在浏览器缓存中
+                    const img = new Image();
+                    img.src = url;
+                    return img.complete && img.naturalHeight !== 0 ? url : '';
+                };
+            ");
+        }
+    }
+}
+
+<style>
+    .cached-image-container {
+        position: relative;
+        overflow: hidden;
+    }
+
+    .cached-image-container img {
+        transition: opacity 0.3s ease;
+    }
+
+    .image-placeholder {
+        border: 2px dashed #dee2e6;
+        border-radius: 0.375rem;
+    }
+
+    .image-placeholder i {
+        font-size: 2rem;
+    }
+</style> 

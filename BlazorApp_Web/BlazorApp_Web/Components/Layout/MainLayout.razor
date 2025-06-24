@@ -1,23 +1,100 @@
 ﻿@inherits LayoutComponentBase
 
-<div class="page">
-    <div class="sidebar">
-        <NavMenu />
-    </div>
-
-    <main>
-        <div class="top-row px-4">
-            <a href="https://learn.microsoft.com/aspnet/core/" target="_blank">About</a>
+<div class="app-layout">
+    <!-- 顶部导航栏 -->
+    <header class="app-header">
+        <div class="header-content">
+            <div class="header-left">
+                <button class="sidebar-toggle" @onclick="ToggleSidebar" title="切换侧边栏">
+                    <i class="bi bi-list"></i>
+                </button>
+                <div class="app-logo">
+                    <i class="bi bi-robot"></i>
+                    <span class="app-title">智能无人机管理系统</span>
+                </div>
+            </div>
+            
+            <div class="header-center">
+                <div class="breadcrumb-container">
+                    <!-- 动态面包屑导航将在这里显示 -->
+                </div>
+            </div>
+            
+            <div class="header-right">
+                <div class="header-actions">
+                    <button class="action-btn" title="通知">
+                        <i class="bi bi-bell"></i>
+                        <span class="notification-badge">3</span>
+                    </button>
+                    <button class="action-btn" title="设置">
+                        <i class="bi bi-gear"></i>
+                    </button>
+                    <div class="user-menu">
+                        <img src="/images/user-avatar.png" alt="用户头像" class="user-avatar" />
+                        <span class="user-name">管理员</span>
+                        <i class="bi bi-chevron-down"></i>
+                    </div>
+                </div>
+            </div>
         </div>
+    </header>
 
-        <article class="content px-4">
+    <!-- 侧边栏 -->
+    <aside class="app-sidebar @(isSidebarCollapsed ? "collapsed" : "")">
+        <NavMenu />
+    </aside>
+
+    <!-- 主内容区域 -->
+    <main class="app-main @(isSidebarCollapsed ? "sidebar-collapsed" : "")">
+        <div class="main-content">
             @Body
-        </article>
+        </div>
     </main>
+
+    <!-- 页面加载指示器 -->
+    <div class="page-loading" id="page-loading">
+        <div class="loading-spinner">
+            <div class="spinner"></div>
+            <span>加载中...</span>
+        </div>
+    </div>
 </div>
 
+<!-- 错误提示 -->
 <div id="blazor-error-ui">
-    An unhandled error has occurred.
-    <a href="" class="reload">Reload</a>
-    <a class="dismiss">🗙</a>
+    <div class="error-content">
+        <i class="bi bi-exclamation-triangle"></i>
+        <span>系统发生错误，请刷新页面重试</span>
+        <div class="error-actions">
+            <a href="" class="reload-btn">刷新页面</a>
+            <a class="dismiss-btn">关闭</a>
+        </div>
+    </div>
 </div>
+
+@code {
+    private bool isSidebarCollapsed = false;
+
+    private void ToggleSidebar()
+    {
+        isSidebarCollapsed = !isSidebarCollapsed;
+        StateHasChanged();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await Task.Delay(500); // 模拟加载时间
+            await HidePageLoading();
+        }
+    }
+
+    private async Task HidePageLoading()
+    {
+        await Task.Run(() => 
+        {
+            // 隐藏页面加载指示器的逻辑
+        });
+    }
+}

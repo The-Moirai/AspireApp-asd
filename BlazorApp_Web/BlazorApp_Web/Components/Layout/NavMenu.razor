@@ -6,40 +6,128 @@
 
 <input type="checkbox" title="Navigation menu" class="navbar-toggler" />
 
-<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
-    <nav class="flex-column">
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                <span class="bi bi-house-door-fill-nav-menu" aria-hidden="true"></span> Home
-            </NavLink>
+<div class="nav-menu">
+    <!-- 用户信息卡片 -->
+    <div class="user-card">
+        <div class="user-info">
+            <img src="/images/user-avatar.png" alt="用户头像" class="user-avatar" />
+            <div class="user-details">
+                <h4 class="user-name">管理员</h4>
+                <span class="user-role">系统管理员</span>
+            </div>
+        </div>
+        <div class="user-status">
+            <span class="status-indicator online"></span>
+            <span class="status-text">在线</span>
+        </div>
+    </div>
+
+    <!-- 导航菜单 -->
+    <nav class="nav-content">
+        <!-- 主要功能 -->
+        <div class="nav-section">
+            <h5 class="section-title">主要功能</h5>
+            <ul class="nav-list">
+                <li class="nav-item">
+                    <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                        <i class="nav-icon bi bi-house-door"></i>
+                        <span class="nav-text">首页概览</span>
+                    </NavLink>
+                </li>
+                
+                <li class="nav-item">
+                    <NavLink class="nav-link" href="drone_map">
+                        <i class="nav-icon bi bi-geo-alt"></i>
+                        <span class="nav-text">无人机地图</span>
+                        <span class="nav-badge">实时</span>
+                    </NavLink>
+                </li>
+                
+                <li class="nav-item">
+                    <NavLink class="nav-link" href="task_manage">
+                        <i class="nav-icon bi bi-kanban"></i>
+                        <span class="nav-text">任务管理</span>
+                        <span class="nav-count">12</span>
+                    </NavLink>
+                </li>
+            </ul>
         </div>
 
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="counter">
-                <span class="bi bi-plus-square-fill-nav-menu" aria-hidden="true"></span> Counter
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="drone_map">
-                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> drone_map
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="task_manage">
-                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> task_manage
-            </NavLink>
-        </div>
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="history-analysis">
-                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> history-analysis
-            </NavLink>
+        <!-- 数据分析 -->
+        <div class="nav-section">
+            <h5 class="section-title">数据分析</h5>
+            <ul class="nav-list">
+                <li class="nav-item">
+                    <NavLink class="nav-link" href="history-analysis">
+                        <i class="nav-icon bi bi-graph-up"></i>
+                        <span class="nav-text">历史数据分析</span>
+                    </NavLink>
+                </li>
+                
+                <li class="nav-item">
+                    <NavLink class="nav-link" href="performance-monitor">
+                        <i class="nav-icon bi bi-speedometer2"></i>
+                        <span class="nav-text">性能监控</span>
+                    </NavLink>
+                </li>
+                
+                <li class="nav-item">
+                    <NavLink class="nav-link" href="reports">
+                        <i class="nav-icon bi bi-file-earmark-text"></i>
+                        <span class="nav-text">报告中心</span>
+                    </NavLink>
+                </li>
+            </ul>
         </div>
 
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="task_manage">
-                <span class="bi bi-list-task" aria-hidden="true"></span> 智能任务管理
-            </NavLink>
+        <!-- 系统设置 -->
+        <div class="nav-section">
+            <h5 class="section-title">系统设置</h5>
+            <ul class="nav-list">
+                <li class="nav-item">
+                    <NavLink class="nav-link" href="system-config">
+                        <i class="nav-icon bi bi-gear"></i>
+                        <span class="nav-text">系统配置</span>
+                    </NavLink>
+                </li>
+                
+                <li class="nav-item">
+                    <NavLink class="nav-link" href="user-management">
+                        <i class="nav-icon bi bi-people"></i>
+                        <span class="nav-text">用户管理</span>
+                    </NavLink>
+                </li>
+                
+                <li class="nav-item">
+                    <NavLink class="nav-link" href="logs">
+                        <i class="nav-icon bi bi-journal-text"></i>
+                        <span class="nav-text">系统日志</span>
+                    </NavLink>
+                </li>
+            </ul>
         </div>
     </nav>
+
+    <!-- 底部信息 -->
+    <div class="nav-footer">
+        <div class="system-info">
+            <div class="info-item">
+                <i class="bi bi-cpu"></i>
+                <span>CPU: 45%</span>
+            </div>
+            <div class="info-item">
+                <i class="bi bi-memory"></i>
+                <span>内存: 6.2GB</span>
+            </div>
+        </div>
+        
+        <div class="version-info">
+            <span>Version 2.1.0</span>
+        </div>
+    </div>
 </div>
+
+@code {
+    // 可以在这里添加导航逻辑
+}
 

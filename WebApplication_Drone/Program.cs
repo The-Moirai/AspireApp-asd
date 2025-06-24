@@ -24,14 +24,34 @@ builder.Services.Configure<RouteOptions>(options =>
 // 控制器服务
 builder.Services.AddControllers();
 
-// CORS配置
+// CORS配置 - 针对Aspire环境优化
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
+        if (builder.Environment.IsDevelopment())
+        {
+            // 开发环境允许所有来源
+            policy.AllowAnyOrigin()
+                  .AllowAnyMethod()
+                  .AllowAnyHeader();
+        }
+        else
+        {
+            // 生产环境指定允许的来源
+            policy.WithOrigins("https://blazorapp-web", "https://localhost:*")
+                  .AllowAnyMethod()
+                  .AllowAnyHeader()
+                  .AllowCredentials();
+        }
+    });
+    
+    // 为图片API添加特殊CORS策略
+    options.AddPolicy("ImagePolicy", policy =>
+    {
         policy.AllowAnyOrigin()
-              .AllowAnyMethod()
-              .AllowAnyHeader();
+              .WithMethods("GET")
+              .WithHeaders("Accept", "Cache-Control", "If-None-Match", "If-Modified-Since");
     });
 });
 
@@ -187,8 +207,22 @@ if (app.Environment.IsDevelopment())
 // HTTPS重定向
 app.UseHttpsRedirection();
 
-// 静态文件服务
-app.UseStaticFiles();
+// 静态文件服务 - 配置缓存策略
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+    {
+        // 为图片文件设置强缓存
+        if (ctx.File.Name.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
+            ctx.File.Name.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
+            ctx.File.Name.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) ||
+            ctx.File.Name.EndsWith(".gif", StringComparison.OrdinalIgnoreCase))
+        {
+            ctx.Context.Response.Headers.Add("Cache-Control", "public, max-age=86400, immutable");
+            ctx.Context.Response.Headers.Add("ETag", $"\"{ctx.File.Name}-{ctx.File.LastModified.Ticks}\"");
+        }
+    }
+});
 
 // CORS
 app.UseCors();
