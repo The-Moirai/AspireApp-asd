@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Net.Http;
 
 namespace BlazorApp_Web.Controllers
 {
@@ -9,9 +10,9 @@ namespace BlazorApp_Web.Controllers
         private readonly HttpClient _httpClient;
         private readonly ILogger<ImageProxyController> _logger;
 
-        public ImageProxyController(HttpClient httpClient, ILogger<ImageProxyController> logger)
+        public ImageProxyController(IHttpClientFactory httpClientFactory, ILogger<ImageProxyController> logger)
         {
-            _httpClient = httpClient;
+            _httpClient = httpClientFactory.CreateClient("ApiService");
             _logger = logger;
         }
 
@@ -175,7 +176,7 @@ namespace BlazorApp_Web.Controllers
             {
                 _logger.LogDebug("代理请求获取子任务图片列表: SubTaskId={SubTaskId}", subTaskId);
 
-                var response = await _httpClient.GetAsync($"api/Tasks/subtask/{subTaskId}/images");
+                var response = await _httpClient.GetAsync($"api/Tasks/subtasks/{subTaskId}/images");
 
                 if (!response.IsSuccessStatusCode)
                 {

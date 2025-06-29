@@ -8,7 +8,10 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using ClassLibrary_Core.Message;
 using ClassLibrary_Core.Data;
-
+using ClassLibrary_Core.Drone;
+using ClassLibrary_Core.Mission;
+using WebApplication_Drone.Services.Clean;
+using System.Collections.Concurrent;
 
 namespace WebApplication_Drone.Services
 {
@@ -17,8 +20,8 @@ namespace WebApplication_Drone.Services
         private readonly ManualResetEvent _stopEvent = new ManualResetEvent(false);
         private TcpListener? _listener;
         private readonly List<TcpClient> _clients = new();
-        private readonly TaskDataService _taskDataService;
-        private readonly DroneDataService _droneDataService;
+        private readonly TaskService _taskService;
+        private readonly DroneService _droneService;
         private readonly SqlserverService _sqlserverService;
         private readonly ILogger<MissionSocketService> _logger;
         private readonly string _imageBasePath;
@@ -29,7 +32,7 @@ namespace WebApplication_Drone.Services
         private const int LargeFileTimeout = 300000;      // 300秒大文件超时
         private const int DefaultBufferSize = 65536;      // 64KB缓冲区
         private const int LargeFileBufferSize = 131072;   // 128KB大文件缓冲区
-        private const long LargeFileThreshold = 1048576;  // 1MB大文件阈值
+        private const long LargeFileThreshold = 1048576*10;  // 1MB大文件阈值
         private const int MaxConcurrentClients = 50;      // 最大并发客户端
         
         // 连接统计
@@ -42,10 +45,10 @@ namespace WebApplication_Drone.Services
         /// </summary>
         public static event EventHandler<ImageSavedEventArgs>? ImageSaved;
 
-        public MissionSocketService(TaskDataService taskDataService, DroneDataService droneDataService, SqlserverService sqlserverService, ILogger<MissionSocketService> logger)
+        public MissionSocketService(TaskService taskService, DroneService droneService, SqlserverService sqlserverService, ILogger<MissionSocketService> logger)
         {
-            _taskDataService = taskDataService;
-            _droneDataService = droneDataService;
+            _taskService = taskService;
+            _droneService = droneService;
             _sqlserverService = sqlserverService;
             _logger = logger;
             _imageBasePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "TaskImages");
@@ -505,7 +508,7 @@ namespace WebApplication_Drone.Services
                     var taskIdString = subtaskName.Split("_")[0];
                     if (Guid.TryParse(taskIdString, out var taskGuid))
                     {
-                        _taskDataService.CompleteSubTask(taskGuid, subtaskName);
+                        _taskService.CompleteSubTask(taskGuid, subtaskName);
                         _logger.LogInformation("子任务完成: {SubtaskName} (TaskId: {TaskId})", subtaskName, taskGuid);
                     }
                     else
@@ -625,9 +628,9 @@ namespace WebApplication_Drone.Services
                     try
                     {
                         // 保存图片到数据库和文件系统
-                        var (imagePath, imageId) = await SaveImageToDatabase(stream, taskId, subtaskName, imageIndex, fileName, fileSize, remainingData);
+                        var imageId = await SaveImageToDatabase(stream, taskId, subtaskName, imageIndex, fileName, fileSize, remainingData);
                         
-                        if (!string.IsNullOrEmpty(imagePath) || imageId != Guid.Empty)
+                        if ( imageId != Guid.Empty)
                         {
                             // 更新任务数据，添加图片路径（向后兼容）
                             Guid taskGuid;
@@ -637,17 +640,12 @@ namespace WebApplication_Drone.Services
                                 taskGuid = Guid.NewGuid();
                             }
                             
-                            if (!string.IsNullOrEmpty(imagePath))
-                            {
-                                _taskDataService.UpdateSubTaskImage(taskGuid, subtaskName, imagePath);
-                            }
-                            
                             // 更新统计信息
                             Interlocked.Increment(ref _totalImagesReceived);
                             Interlocked.Add(ref _totalBytesReceived, fileSize);
                             
-                            _logger.LogInformation("✅ 单张图片接收成功: TaskId={TaskId}, SubTask={SubTask}, ImagePath={ImagePath}, ImageId={ImageId}, 序号={ImageIndex}/{TotalImages}, 大小={FileSize:N0}字节", 
-                                taskId, subtaskName, imagePath, imageId, imageIndex, totalImages, fileSize);
+                            _logger.LogInformation("✅ 单张图片接收成功: TaskId={TaskId}, SubTask={SubTask}, ImageId={ImageId}, 序号={ImageIndex}/{TotalImages}, 大小={FileSize:N0}字节", 
+                                taskId, subtaskName, imageId, imageIndex, totalImages, fileSize);
                         }
                         else
                         {
@@ -823,7 +821,7 @@ namespace WebApplication_Drone.Services
         /// <summary>
         /// 保存图片到数据库和文件系统
         /// </summary>
-        private async Task<(string imagePath, Guid imageId)> SaveImageToDatabase(NetworkStream stream, string taskId, string subtaskName, int imageIndex, string fileName, long fileSize, byte[]? preloadedData = null)
+        private async Task<Guid> SaveImageToDatabase(NetworkStream stream, string taskId, string subtaskName, int imageIndex, string fileName, long fileSize, byte[]? preloadedData = null)
         {
             try
             {
@@ -890,7 +888,7 @@ namespace WebApplication_Drone.Services
                     _logger.LogWarning("数据库中未找到子任务: {SubTaskName} in Task {TaskId}", subtaskName, taskId);
                     
                     // 尝试从内存中查找（向后兼容）
-                    var mainTaskFromMemory = _taskDataService.GetTask(taskGuid);
+                    var mainTaskFromMemory = _taskService.GetTask(taskGuid);
                     if (mainTaskFromMemory != null)
                     {
                         var subTaskFromMemory = mainTaskFromMemory.SubTasks.FirstOrDefault(st => st.Description == subtaskName);
@@ -905,35 +903,6 @@ namespace WebApplication_Drone.Services
                                 subtaskName, string.Join(", ", mainTaskFromMemory.SubTasks.Select(st => st.Description)));
                         }
                     }
-                    
-                    // 如果仍然没有找到子任务，保存到文件系统
-                    if (subTaskId == Guid.Empty)
-                    {
-                        _logger.LogInformation("跳过数据库保存，仅保存到文件系统");
-                        
-                        string imagePath = string.Empty;
-                        try
-                        {
-                            imagePath = await SaveImageToFileSystem(imageData, taskId, subtaskName, imageIndex, fileName);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, "保存图片到文件系统失败");
-                        }
-                        
-                        return (imagePath, Guid.Empty); // 返回文件路径但数据库ID为空
-                    }
-                }
-
-                // 同时保存到文件系统作为备份（向后兼容）
-                string imagePathFinal = string.Empty;
-                try
-                {
-                    imagePathFinal = await SaveImageToFileSystem(imageData, taskId, subtaskName, imageIndex, fileName);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "保存图片到文件系统失败");
                 }
 
                 // 保存图片到数据库
@@ -957,15 +926,14 @@ namespace WebApplication_Drone.Services
                         ImageIndex = imageIndex,
                         FileSize = imageData.Length,
                         SavedAt = DateTime.Now,
-                        WebPath = imagePathFinal,
                         SubTaskName = subtaskName
                     });
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "保存图片到数据库失败，将使用文件系统备份方案");
+                    _logger.LogError(ex, "保存图片到数据库失败");
                 }
-                return (imagePathFinal, imageId);
+                return (imageId);
             }
             catch (Exception ex)
             {
@@ -997,7 +965,7 @@ namespace WebApplication_Drone.Services
                 };
 
                 // 直接更新TaskDataService中的任务数据
-                var mainTask = _taskDataService.GetTask(taskGuid);
+                var mainTask = _taskService.GetTask(taskGuid);
                 if (mainTask != null)
                 {
                     var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
@@ -1052,132 +1020,6 @@ namespace WebApplication_Drone.Services
             };
         }
 
-        /// <summary>
-        /// 保存图片到文件系统
-        /// </summary>
-        private async Task<string> SaveImageToFileSystem(byte[] imageData, string taskId, string subtaskName, int imageIndex, string fileName)
-        {
-            try
-            {
-                // 创建任务专用文件夹
-                var taskImagePath = Path.Combine(_imageBasePath, taskId);
-                Directory.CreateDirectory(taskImagePath);
-
-                // 生成唯一文件名
-                var fileExtension = Path.GetExtension(fileName);
-                var uniqueFileName = $"{subtaskName}_{DateTime.Now:yyyyMMddHHmmss}_{imageIndex}{fileExtension}";
-                var savePath = Path.Combine(taskImagePath, uniqueFileName);
-
-                // 保存文件
-                await File.WriteAllBytesAsync(savePath, imageData);
-
-                // 返回相对于wwwroot的路径，用于Web访问
-                var webPath = $"/TaskImages/{taskId}/{uniqueFileName}";
-                _logger.LogInformation("图片保存到文件系统成功: {SavePath}, Web路径: {WebPath}, 文件大小: {FileSize}", 
-                    savePath, webPath, imageData.Length);
-                
-                return webPath;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "保存图片到文件系统失败");
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// 根据头消息信息保存图片文件（保留向后兼容）
-        /// </summary>
-        private async Task<string> SaveImageFromHeaderInfo(NetworkStream stream, string taskId, string subtaskName, int imageIndex, string fileName, long fileSize, byte[]? preloadedData = null)
-        {
-            try
-            {
-                _logger.LogDebug("开始根据头消息信息保存第{ImageIndex}张图片: {FileName}, {FileSize}字节", imageIndex, fileName, fileSize);
-
-                // 验证文件大小的合理性
-                if (fileSize <= 0 || fileSize > 100 * 1024 * 1024) // 100MB限制
-                {
-                    throw new InvalidDataException($"文件大小异常: {fileSize}");
-                }
-
-                // 创建任务专用文件夹
-                var taskImagePath = Path.Combine(_imageBasePath, taskId);
-                Directory.CreateDirectory(taskImagePath);
-
-                // 生成唯一文件名
-                var fileExtension = Path.GetExtension(fileName);
-                var uniqueFileName = $"{subtaskName}_{DateTime.Now:yyyyMMddHHmmss}_{imageIndex}{fileExtension}";
-                var savePath = Path.Combine(taskImagePath, uniqueFileName);
-
-                _logger.LogDebug("开始接收文件内容到: {SavePath}", savePath);
-
-                // 直接保存文件内容（跳过Python的文件名长度等信息）
-                using (var fileStream = new FileStream(savePath, FileMode.Create, FileAccess.Write))
-                {
-                    long totalBytesReceived = 0;
-
-                    // 首先写入预加载的数据
-                    if (preloadedData != null && preloadedData.Length > 0)
-                    {
-                        await fileStream.WriteAsync(preloadedData, 0, preloadedData.Length);
-                        totalBytesReceived += preloadedData.Length;
-                        _logger.LogDebug("写入预加载数据: {PreloadedBytes} 字节", preloadedData.Length);
-                    }
-
-                    // 继续从流中读取剩余数据
-                    var buffer = new byte[4096];
-                    while (totalBytesReceived < fileSize)
-                    {
-                        int bytesToRead = (int)Math.Min(buffer.Length, fileSize - totalBytesReceived);
-                        int bytesRead = await stream.ReadAsync(buffer, 0, bytesToRead);
-                        if (bytesRead == 0) 
-                        {
-                            _logger.LogWarning("连接意外断开，已接收字节: {Received}/{Total}", totalBytesReceived, fileSize);
-                            break;
-                        }
-
-                        await fileStream.WriteAsync(buffer, 0, bytesRead);
-                        totalBytesReceived += bytesRead;
-                        
-                        // 每接收1MB记录一次进度
-                        if (totalBytesReceived % (1024 * 1024) == 0 || totalBytesReceived == fileSize)
-                        {
-                            _logger.LogDebug("接收进度: {Received}/{Total} ({Percentage:F1}%)", 
-                                totalBytesReceived, fileSize, (double)totalBytesReceived / fileSize * 100);
-                        }
-                    }
-                }
-
-                // 返回相对于wwwroot的路径，用于Web访问
-                var webPath = $"/TaskImages/{taskId}/{uniqueFileName}";
-                _logger.LogInformation("头消息图片保存完成: {SavePath}, Web路径: {WebPath}, 文件大小: {FileSize}", 
-                    savePath, webPath, fileSize);
-                
-                return webPath;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "根据头消息信息保存图片文件失败");
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// 确保读取指定数量的字节
-        /// </summary>
-        private async Task ReadExactBytes(NetworkStream stream, byte[] buffer, int count)
-        {
-            int totalBytesRead = 0;
-            while (totalBytesRead < count)
-            {
-                int bytesRead = await stream.ReadAsync(buffer, totalBytesRead, count - totalBytesRead);
-                if (bytesRead == 0)
-                {
-                    throw new EndOfStreamException($"连接意外断开，期望读取 {count} 字节，实际读取 {totalBytesRead} 字节");
-                }
-                totalBytesRead += bytesRead;
-            }
-        }
 
         /// <summary>
         /// 停止服务

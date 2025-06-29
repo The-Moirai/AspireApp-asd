@@ -3,6 +3,9 @@ using ClassLibrary_Core.Drone;
 using ClassLibrary_Core.Message;
 using ClassLibrary_Core.Mission;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using WebApplication_Drone.Services.Models;
+using WebApplication_Drone.Services.Clean;
 using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Reflection;
@@ -27,18 +30,17 @@ namespace WebApplication_Drone.Services
         private string? _currentHost;
         private int _currentPort;
 
-        private readonly TaskDataService _taskDataService;
-        private readonly DroneDataService _droneDataService;
+        private readonly TaskService _taskService;
+        private readonly DroneService _droneService;
         private readonly ILogger<SocketService> _logger;
         private readonly System.Timers.Timer _timer;
 
-        public SocketService(TaskDataService taskDataService, DroneDataService droneDataService, ILogger<SocketService> logger)
+        public SocketService(TaskService taskService, DroneService droneService, ILogger<SocketService> logger)
         {
-            _taskDataService = taskDataService;
-            _taskDataService.TaskChanged += OnTaskChanged;
-            _droneDataService = droneDataService;
-            _droneDataService.DroneChanged += OnDroneChanged;
-
+            _taskService = taskService;
+            _taskService.TaskChanged += OnTaskChanged; // 订阅任务变更事件
+            _droneService = droneService;
+            _droneService.DroneChanged += OnDroneChanged; // 订阅无人机变更事件
             _logger = logger;
 
             _timer = new System.Timers.Timer(5000);
@@ -67,7 +69,7 @@ namespace WebApplication_Drone.Services
                     _client = new TcpClient();
                     await _client.ConnectAsync(host, port);
                     _stream = _client.GetStream();
-                    Message_Send message = new Message_Send() { content = "50", type = "start_all" };
+                    Message_Send message = new Message_Send() { content = "30", type = "start_all" };
                     SendMessageAsync(message);
                     _currentRetry = 0; // 重置重试次数
                     _isReconnecting = false;
@@ -254,7 +256,7 @@ namespace WebApplication_Drone.Services
                         string json = Encoding.UTF8.GetString(jsonBytes);
                         _logger.LogDebug("接收到消息: {Json}", json);
                         var message = JsonSerializer.Deserialize<Message>(json);
-                        ProcessMessage(message);
+                        await ProcessMessage(message);
 
                         // 释放JsonDocument资源
                         document?.Dispose();
@@ -303,7 +305,7 @@ namespace WebApplication_Drone.Services
         /// 处理接收到的消息
         /// </summary>
         /// <param name="message"></param>
-        private void ProcessMessage(Message message)
+        private async Task ProcessMessage(Message message)
         {
             if (message == null)
             {
@@ -318,7 +320,7 @@ namespace WebApplication_Drone.Services
                         HandleAnsNodeInfo(message.content);
                         break;
                     case "tasks_info":
-                        HandleTasksInfo(message.content);
+                        await HandleTasksInfo(message.content);
                         break;
                     case "Subtasks_info":
                         HandleSubtasksInfo(message.content);
@@ -374,22 +376,22 @@ namespace WebApplication_Drone.Services
                 _logger.LogInformation("任务 '{TaskDesc}' 的子任务 '{SubtaskDesc}' 已从节点 '{OldNode}' 重新分配到节点 '{NewNode}'", taskDesc, subtaskDesc, oldNode, newNode);
 
                 // 1. 同步到 TaskDataService
-                var mainTask = _taskDataService.GetTasks().FirstOrDefault(t => t.Description == taskDesc);
+                var mainTask = _taskService.GetTasks().FirstOrDefault(t => t.Description == taskDesc);
                 if (mainTask == null) continue;
                 var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Description == subtaskDesc);
                 if (subTask == null) continue;
 
                 // 卸载并重装
-                _taskDataService.UnloadSubTask(mainTask.Id, subTask.Id);
-                _taskDataService.ReloadSubTask(mainTask.Id, subTask.Id, newNode);
+                _taskService.UnloadSubTask(mainTask.Id, subTask.Id);
+                _taskService.ReloadSubTask(mainTask.Id, subTask.Id, newNode);
 
                 // 2. 同步到 DroneDataService
                 // 从旧无人机移除子任务
-                var oldDrone = _droneDataService.GetDrones().FirstOrDefault(d => d.Name == oldNode);
+                var oldDrone = _droneService.GetDrones().FirstOrDefault(d => d.Name == oldNode);
                 oldDrone?.AssignedSubTasks.RemoveAll(st => st.Id == subTask.Id);
 
                 // 添加到新无人机
-                var newDrone = _droneDataService.GetDrones().FirstOrDefault(d => d.Name == newNode);
+                var newDrone = _droneService.GetDrones().FirstOrDefault(d => d.Name == newNode);
                 if (newDrone != null && !newDrone.AssignedSubTasks.Any(st => st.Id == subTask.Id))
                 {
                     newDrone.AssignedSubTasks.Add(subTask);
@@ -401,7 +403,7 @@ namespace WebApplication_Drone.Services
         /// content格式: { "节点名": ["子任务名1", "子任务名2", ...] }
         /// </summary>
         /// <param name="content"></param>
-        private void HandleTasksInfo(Dictionary<string, List<object>> content)
+        private async Task HandleTasksInfo(Dictionary<string, List<object>> content)
         {
             foreach (var nodeAssignment in content)
             {
@@ -434,7 +436,7 @@ namespace WebApplication_Drone.Services
                             continue;
                         }
                         
-                        var mainTask = _taskDataService.GetTasks().FirstOrDefault(t => t.Id == mainTaskGuid);
+                        var mainTask = _taskService.GetTasks().FirstOrDefault(t => t.Id == mainTaskGuid);
                         if (mainTask == null)
                         {
                             _logger.LogWarning("MainTask Not Found 未找到主任务: {MainTaskName} (GUID: {MainTaskGuid})", mainTaskName, mainTaskGuid);
@@ -445,12 +447,18 @@ namespace WebApplication_Drone.Services
                         var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Description == subTaskName);
                         if (subTask == null)
                         {
-                            _logger.LogWarning("IN MainTask在主任务 '{MainTaskName}' Not Found SubTaskName 中未找到子任务: {SubTaskName}", mainTaskName, subTaskName);
-                            continue;
+                            _logger.LogWarning("k在主任务 '{MainTaskName}' 中未找到子任务: {SubTaskName}.", mainTaskName, subTaskName);
                         }
 
-                        // 分配子任务到节点
-                        bool success = _taskDataService.AssignSubTask(mainTask.Id, subTask.Id, nodeName);
+                        // 【关键补全】分配子任务到节点
+                        subTask.AssignedDrone = nodeName;
+                        subTask.AssignedTime = DateTime.Now;
+
+                        // 异步更新数据库
+                        await _taskService.UpdateSubTaskAsync(subTask);
+
+                        // 分配子任务到节点（如有其它业务逻辑）
+                        bool success = _taskService.AssignSubTask(mainTask.Id, subTask.Id, nodeName);
                         if (success)
                         {
                             _logger.LogInformation("成功将子任务 '{SubTaskName}' 分配给节点 '{NodeName}'", subTaskName, nodeName);
@@ -500,7 +508,7 @@ namespace WebApplication_Drone.Services
                         continue;
                     }
                     
-                    var mainTask = _taskDataService.GetTask(mainTaskGuid);
+                    var mainTask = _taskService.GetTask(mainTaskGuid);
                     if (mainTask == null)
                     {
                         _logger.LogError("Not Found MainTask ,the name is: {MainTaskName} (GUID: {MainTaskGuid})，So the subTask is not add。", mainTaskName, mainTaskGuid);
@@ -531,7 +539,7 @@ namespace WebApplication_Drone.Services
                         };
 
                         // 添加子任务到主任务
-                        _taskDataService.addSubTasks(mainTask.Id, subTask);
+                        _taskService.addSubTasks(mainTask.Id, subTask);
                         _logger.LogInformation("For MainTaskName :'{MainTaskName}' Add SubTaskName: {SubTaskName} (ID: {SubTaskId})", 
                             mainTaskName, subTaskName, subTask.Id);
                     }
@@ -552,7 +560,7 @@ namespace WebApplication_Drone.Services
         private void HandleAnsNodeInfo(Dictionary<string, List<object>> content)
         {
             List<Drone> drones = ParseDronesFromJson(content);
-            _droneDataService.SetDrones(drones);
+            _droneService.SetDrones(drones);
         }
         /// <summary>
         /// 处理簇信息
@@ -668,7 +676,7 @@ namespace WebApplication_Drone.Services
                 // 更新任务的处理逻辑
                 _logger.LogInformation($"Task {e.MainTask.Description} update。");
             }
-            else if (e.Action == "Add")
+            else if (e.Action == "Added")
             {
                 SendMessageAsync(new Message_Send
                 {

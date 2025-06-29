@@ -2,11 +2,16 @@ using Microsoft.Data.SqlClient;
 using Microsoft.OpenApi.Models;
 using WebApplication_Drone;
 using WebApplication_Drone.Services;
+using WebApplication_Drone.Services.Clean;
+using WebApplication_Drone.Services.Data;
+using WebApplication_Drone.Services.Interfaces;
+using WebApplication_Drone.Services.Models;
 using WebApplication_Drone.Middleware;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Caching.StackExchangeRedis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -99,14 +104,40 @@ builder.Services.AddSwaggerGen(c =>
 
 #region 缓存配置
 
-// 内存缓存（移除SizeLimit以避免Size设置问题）
-builder.Services.AddMemoryCache(options =>
+// 配置缓存选项
+builder.Services.Configure<CacheOptions>(builder.Configuration.GetSection("cache"));
+
+// Redis分布式缓存配置（Aspire环境）
+builder.Services.AddStackExchangeRedisCache(options =>
 {
-    options.CompactionPercentage = 0.1; // 压缩百分比
+    options.Configuration = builder.Configuration.GetConnectionString("cache");
+    options.InstanceName = builder.Configuration.GetValue<string>("Cache:Redis:InstanceName") ?? "AspireApp_";
 });
 
-// 分布式缓存（使用内存缓存）
-builder.Services.AddDistributedMemoryCache();
+// 内存缓存（作为本地缓存，用于高频访问数据）
+builder.Services.AddMemoryCache(options =>
+{
+    var memoryOptions = builder.Configuration.GetSection("Cache:Memory").Get<WebApplication_Drone.Services.Models.MemoryCacheOptions>();
+    options.CompactionPercentage = memoryOptions?.CompactionPercentage ?? 0.1;
+    options.SizeLimit = memoryOptions?.SizeLimit ?? 1000;
+});
+
+// 注册优化的Redis缓存服务（Singleton，确保全局唯一）
+builder.Services.AddSingleton<OptimizedRedisCacheService>();
+
+// 注册原有Redis缓存服务（保持向后兼容）
+builder.Services.AddSingleton<RedisCacheService>();
+
+// 注册Redis诊断服务（Singleton，用于连接问题排查）
+builder.Services.AddSingleton<RedisConnectionDiagnosticService>();
+
+// 添加Redis健康检查
+builder.Services.AddHealthChecks()
+    .AddRedis(
+        builder.Configuration.GetConnectionString("cache") ?? "cache:6379",
+        name: "redis",
+        tags: new[] { "ready", "cache" }
+    );
 
 #endregion
 
@@ -115,15 +146,21 @@ builder.Services.AddDistributedMemoryCache();
 // 配置选项绑定
 builder.Services.Configure<DroneServiceOptions>(
     builder.Configuration.GetSection("DroneService"));
-builder.Services.Configure<TaskServiceOptions>(
-    builder.Configuration.GetSection("TaskService"));
+builder.Services.AddOptions<TaskServiceOptions>()
+    .Bind(builder.Configuration.GetSection("TaskService"));
+builder.Services.AddOptions<DataServiceOptions>()
+    .Bind(builder.Configuration.GetSection("DataService"));
 
 // 数据库服务（Singleton，确保线程安全的数据库连接管理）
 builder.Services.AddSingleton<SqlserverService>();
 
-// 业务逻辑服务（Singleton，保持状态和缓存）
-builder.Services.AddSingleton<DroneDataService>();
-builder.Services.AddSingleton<TaskDataService>();
+// 数据访问层 - 新的分层架构（改为Singleton以支持业务服务）
+builder.Services.AddSingleton<IDroneRepository, DroneRepository>();
+builder.Services.AddSingleton<ITaskRepository, TaskRepository>();
+
+// 业务服务层 - 新的分层架构（改为Singleton以支持Socket服务）
+builder.Services.AddSingleton<DroneService>();
+builder.Services.AddSingleton<TaskService>();
 
 // Socket服务（Singleton，维持长连接状态）
 builder.Services.AddSingleton<SocketService>();
@@ -199,38 +236,19 @@ if (app.Environment.IsDevelopment())
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "AspireApp Drone API v1");
         c.RoutePrefix = string.Empty; // 设置Swagger UI为根路径
-        c.DisplayRequestDuration(); // 显示请求耗时
-        c.EnableDeepLinking(); // 启用深度链接
     });
 }
 
-// HTTPS重定向
-app.UseHttpsRedirection();
-
-// 静态文件服务 - 配置缓存策略
-app.UseStaticFiles(new StaticFileOptions
-{
-    OnPrepareResponse = ctx =>
-    {
-        // 为图片文件设置强缓存
-        if (ctx.File.Name.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
-            ctx.File.Name.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
-            ctx.File.Name.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) ||
-            ctx.File.Name.EndsWith(".gif", StringComparison.OrdinalIgnoreCase))
-        {
-            ctx.Context.Response.Headers.Add("Cache-Control", "public, max-age=86400, immutable");
-            ctx.Context.Response.Headers.Add("ETag", $"\"{ctx.File.Name}-{ctx.File.LastModified.Ticks}\"");
-        }
-    }
-});
-
-// CORS
+// CORS中间件
 app.UseCors();
 
-// 授权
-app.UseAuthorization();
+// 路由中间件
+app.UseRouting();
 
-// 控制器路由
+// 授权中间件（如果需要）
+// app.UseAuthorization();
+
+// 端点映射
 app.MapControllers();
 
 #endregion

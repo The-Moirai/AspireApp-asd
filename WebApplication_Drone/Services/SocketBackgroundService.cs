@@ -3,19 +3,20 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Threading;
 using System.Threading.Tasks;
+using WebApplication_Drone.Services.Clean;
 
 public class SocketBackgroundService : BackgroundService
 {
     private readonly SocketService _socketService;
     private readonly MissionSocketService _missionsocketService;
-    private readonly TaskDataService _taskDataService;
+    private readonly TaskService _taskService;
     private readonly ILogger<SocketBackgroundService> _logger;
 
-    public SocketBackgroundService(SocketService socketService, MissionSocketService missionsocketService, TaskDataService taskDataService, ILogger<SocketBackgroundService> logger)
+    public SocketBackgroundService(SocketService socketService, MissionSocketService missionsocketService, TaskService taskService, ILogger<SocketBackgroundService> logger)
     {
         _socketService = socketService;
         _missionsocketService = missionsocketService;
-        _taskDataService = taskDataService;
+        _taskService = taskService;
         _logger = logger;
     }
 
@@ -27,7 +28,7 @@ public class SocketBackgroundService : BackgroundService
             
             // 只加载任务数据，图片元数据按需加载
             _logger.LogInformation("加载任务数据...");
-            await _taskDataService.LoadTasksFromDatabaseAsync();
+            await _taskService.LoadTasksFromDatabaseAsync();
             _logger.LogInformation("图片数据将按需从数据库实时加载");
             
             // 启动MissionSocketService (图片接收服务)

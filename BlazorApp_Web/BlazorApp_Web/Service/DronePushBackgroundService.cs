@@ -2,6 +2,7 @@
 using ClassLibrary_Core.Drone;
 using Microsoft.AspNetCore.SignalR;
 using System.Net.Http;
+using System.Text.Json;
 
 namespace BlazorApp_Web.Service
 {
@@ -31,7 +32,7 @@ namespace BlazorApp_Web.Service
             {
                 try
                 {
-                    var drones = await GetDronesAsync();
+                    var drones = await GetRealTimeDronesAsync();
 
                     // 只有当数据有变化时才推送
                     if (HasDronesChanged(drones))
@@ -63,23 +64,112 @@ namespace BlazorApp_Web.Service
             }
         }
 
-        private async Task<List<Drone>?> GetDronesAsync()
+        private async Task<List<Drone>?> GetRealTimeDronesAsync()
         {
             try
             {
                 var client = _httpClientFactory.CreateClient("ApiService");
                 client.Timeout = TimeSpan.FromSeconds(10); // 设置较短的超时时间
-                var drones = await client.GetFromJsonAsync<List<Drone>>("api/drones");
-                return drones ?? new List<Drone>();
+                
+                // 使用新的实时数据API
+                var response = await client.GetAsync("api/drones/realtime");
+                
+                if (response.IsSuccessStatusCode)
+                {
+                    var jsonString = await response.Content.ReadAsStringAsync();
+                    
+                    // 直接解析JSON，不使用强类型
+                    using var jsonDoc = JsonDocument.Parse(jsonString);
+                    var root = jsonDoc.RootElement;
+                    
+                    // 检查是否有Success属性（新格式）
+                    if (root.TryGetProperty("success", out var successElement))
+                    {
+                        var success = successElement.GetBoolean();
+                        if (!success)
+                        {
+                            var message = root.TryGetProperty("Message", out var messageElement) 
+                                ? messageElement.GetString() 
+                                : "未知错误";
+                            _logger.LogWarning("实时数据API返回失败: {Message}", message);
+                            return null;
+                        }
+                        
+                        // 检查Data属性
+                        if (root.TryGetProperty("data", out var dataElement))
+                        {
+                            var drones = JsonSerializer.Deserialize<List<Drone>>(dataElement.GetRawText(), new JsonSerializerOptions
+                            {
+                                PropertyNameCaseInsensitive = true
+                            });
+                            
+                            if (drones != null)
+                            {
+                                // 获取额外的元数据
+                                var count = root.TryGetProperty("count", out var countElement) ? countElement.GetInt32() : drones.Count;
+                                var dataSource = root.TryGetProperty("dataSource", out var sourceElement) ? sourceElement.GetString() : "Unknown";
+                                var timestamp = root.TryGetProperty("timestamp", out var timeElement) ? timeElement.GetString() : "Unknown";
+                                
+                                _logger.LogDebug("成功获取实时无人机数据，数量: {Count}, 数据源: {DataSource}, 时间戳: {Timestamp}", 
+                                    count, dataSource, timestamp);
+                                return drones;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // 兼容旧格式：直接检查Data属性
+                        if (root.TryGetProperty("Data", out var dataElement))
+                        {
+                            var drones = JsonSerializer.Deserialize<List<Drone>>(dataElement.GetRawText(), new JsonSerializerOptions
+                            {
+                                PropertyNameCaseInsensitive = true
+                            });
+                            
+                            if (drones != null)
+                            {
+                                _logger.LogDebug("成功获取实时无人机数据（旧格式），数量: {Count}", drones.Count);
+                                return drones;
+                            }
+                        }
+                        else
+                        {
+                            // 尝试直接解析为Drone列表（最简格式）
+                            var drones = JsonSerializer.Deserialize<List<Drone>>(jsonString, new JsonSerializerOptions
+                            {
+                                PropertyNameCaseInsensitive = true
+                            });
+                            
+                            if (drones != null)
+                            {
+                                _logger.LogDebug("成功获取实时无人机数据（直接格式），数量: {Count}", drones.Count);
+                                return drones;
+                            }
+                        }
+                    }
+                    
+                    _logger.LogWarning("实时数据API返回的数据格式不正确");
+                    return null;
+                }
+                else
+                {
+                    _logger.LogWarning("实时数据API请求失败，状态码: {StatusCode}", response.StatusCode);
+                    return null;
+                }
             }
             catch (HttpRequestException ex)
             {
-                _logger.LogWarning(ex, "无法连接到API服务");
+                _logger.LogWarning(ex, "无法连接到实时数据API服务");
                 return null;
             }
             catch (TaskCanceledException ex) when (ex.InnerException is TimeoutException)
             {
-                _logger.LogWarning("API请求超时");
+                _logger.LogWarning("实时数据API请求超时");
+                return null;
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex, "解析实时数据API响应失败");
                 return null;
             }
         }

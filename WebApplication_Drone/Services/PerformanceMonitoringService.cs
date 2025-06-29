@@ -1,24 +1,11 @@
 using System.Diagnostics;
 using System.Runtime;
 using Microsoft.Extensions.Options;
+using WebApplication_Drone.Services.Models;
+using WebApplication_Drone.Services.Clean;
 
 namespace WebApplication_Drone.Services
 {
-    /// <summary>
-    /// 性能监控配置选项
-    /// </summary>
-    public class PerformanceMonitoringOptions
-    {
-        public bool EnableMetricsCollection { get; set; } = true;
-        public int MetricsCollectionInterval { get; set; } = 300; // 5分钟
-        public bool EnableGCMetrics { get; set; } = true;
-        public bool EnableBusinessMetrics { get; set; } = true;
-        public bool LogPerformanceWarnings { get; set; } = true;
-        public long MemoryThresholdMB { get; set; } = 1024; // 1GB
-        public double CpuThresholdPercent { get; set; } = 80.0;
-        public int PerformanceHistorySize { get; set; } = 288; // 24小时的数据（每5分钟一个点）
-    }
-
     /// <summary>
     /// 性能指标数据
     /// </summary>
@@ -39,6 +26,7 @@ namespace WebApplication_Drone.Services
         public int TotalTasks { get; set; }
         public double RequestsPerSecond { get; set; }
         public double AverageResponseTimeMs { get; set; }
+        public long TotalRequests { get; set; }
         public long TotalExceptions { get; set; }
     }
 
@@ -61,8 +49,8 @@ namespace WebApplication_Drone.Services
     {
         private readonly ILogger<PerformanceMonitoringService> _logger;
         private readonly PerformanceMonitoringOptions _options;
-        private readonly DroneDataService _droneService;
-        private readonly TaskDataService _taskService;
+        private readonly DroneService _droneService;
+        private readonly TaskService _taskService;
         private readonly IServiceProvider _serviceProvider;
 
         // 性能计数器
@@ -84,8 +72,8 @@ namespace WebApplication_Drone.Services
         public PerformanceMonitoringService(
             ILogger<PerformanceMonitoringService> logger,
             IOptions<PerformanceMonitoringOptions> options,
-            DroneDataService droneService,
-            TaskDataService taskService,
+            DroneService droneService,
+            TaskService taskService,
             IServiceProvider serviceProvider)
         {
             _logger = logger;
@@ -115,20 +103,20 @@ namespace WebApplication_Drone.Services
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            if (!_options.EnableMetricsCollection)
+            if (!_options.Enabled)
             {
                 _logger.LogInformation("性能监控已禁用");
                 return;
             }
 
-            _logger.LogInformation("性能监控服务已启动，收集间隔: {Interval}秒", _options.MetricsCollectionInterval);
+            _logger.LogInformation("性能监控服务已启动，收集间隔: {Interval}秒", _options.CollectionIntervalSeconds);
 
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
                 {
                     await CollectMetricsAsync();
-                    await Task.Delay(TimeSpan.FromSeconds(_options.MetricsCollectionInterval), stoppingToken);
+                    await Task.Delay(TimeSpan.FromSeconds(_options.CollectionIntervalSeconds), stoppingToken);
                 }
                 catch (OperationCanceledException)
                 {
@@ -157,16 +145,10 @@ namespace WebApplication_Drone.Services
                 await CollectSystemMetricsAsync(metrics);
 
                 // 收集GC指标
-                if (_options.EnableGCMetrics)
-                {
                     CollectGCMetrics(metrics);
-                }
 
                 // 收集业务指标
-                if (_options.EnableBusinessMetrics)
-                {
                     await CollectBusinessMetricsAsync(metrics);
-                }
 
                 // 收集请求统计
                 CollectRequestMetrics(metrics);
@@ -175,7 +157,7 @@ namespace WebApplication_Drone.Services
                 StoreMetricsHistory(metrics);
 
                 // 检查性能警告
-                if (_options.LogPerformanceWarnings)
+                if (_options.EnableAlerts)
                 {
                     await CheckPerformanceAlertsAsync(metrics);
                 }
@@ -310,7 +292,7 @@ namespace WebApplication_Drone.Services
                 _metricsHistory.Enqueue(metrics);
                 
                 // 保持历史数据大小限制
-                while (_metricsHistory.Count > _options.PerformanceHistorySize)
+                while (_metricsHistory.Count > _options.MaxHistoryPoints)
                 {
                     _metricsHistory.Dequeue();
                 }
@@ -325,7 +307,7 @@ namespace WebApplication_Drone.Services
             var alerts = new List<PerformanceAlert>();
 
             // CPU使用率警告
-            if (metrics.CpuUsagePercent > _options.CpuThresholdPercent)
+            if (metrics.CpuUsagePercent > _options.CpuWarningThreshold)
             {
                 alerts.Add(new PerformanceAlert
                 {
@@ -335,23 +317,39 @@ namespace WebApplication_Drone.Services
                     Metrics = new Dictionary<string, object>
                     {
                         ["CpuUsage"] = metrics.CpuUsagePercent,
-                        ["Threshold"] = _options.CpuThresholdPercent
+                        ["Threshold"] = _options.CpuWarningThreshold
                     }
                 });
             }
 
             // 内存使用警告
-            if (metrics.MemoryUsageMB > _options.MemoryThresholdMB)
+            if (metrics.MemoryUsageMB > _options.MemoryWarningThresholdMB)
             {
                 alerts.Add(new PerformanceAlert
                 {
                     AlertType = "HighMemoryUsage",
                     Message = $"内存使用过高: {metrics.MemoryUsageMB}MB",
-                    Severity = metrics.MemoryUsageMB > _options.MemoryThresholdMB * 1.5 ? "Critical" : "Warning",
+                    Severity = metrics.MemoryUsageMB > _options.MemoryWarningThresholdMB * 1.5 ? "Critical" : "Warning",
                     Metrics = new Dictionary<string, object>
                     {
                         ["MemoryUsage"] = metrics.MemoryUsageMB,
-                        ["Threshold"] = _options.MemoryThresholdMB
+                        ["Threshold"] = _options.MemoryWarningThresholdMB
+                    }
+                });
+            }
+
+            // 响应时间警告
+            if (metrics.AverageResponseTimeMs > _options.ResponseTimeWarningThresholdMs)
+            {
+                alerts.Add(new PerformanceAlert
+                {
+                    AlertType = "HighResponseTime",
+                    Message = $"响应时间过长: {metrics.AverageResponseTimeMs:F1}ms",
+                    Severity = metrics.AverageResponseTimeMs > _options.ResponseTimeWarningThresholdMs * 2 ? "Critical" : "Warning",
+                    Metrics = new Dictionary<string, object>
+                    {
+                        ["ResponseTime"] = metrics.AverageResponseTimeMs,
+                        ["Threshold"] = _options.ResponseTimeWarningThresholdMs
                     }
                 });
             }
@@ -472,6 +470,16 @@ namespace WebApplication_Drone.Services
             var freed = before - after;
             
             _logger.LogInformation("垃圾回收完成，释放内存: {FreedMB}MB", freed / 1024 / 1024);
+        }
+
+        public void RecordRequestStart()
+        {
+            // 兼容旧接口，无需实现内容
+        }
+
+        public void RecordRequestComplete(long responseTimeMs)
+        {
+            RecordRequest(responseTimeMs);
         }
 
         public override void Dispose()

@@ -2,8 +2,6 @@ using AspireApp_Drone.BlazorApp_Drone.Hubs;
 using BlazorApp_Web.Client.Pages;
 using BlazorApp_Web.Components;
 using BlazorApp_Web.Service;
-using Microsoft.AspNetCore.SignalR;
-using Microsoft.Extensions.DependencyInjection;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -33,7 +31,7 @@ builder.Services.AddHttpClient("ApiService", client =>
     if (builder.Environment.IsDevelopment())
     {
         // 优先使用Aspire服务发现，如果不可用则fallback到localhost
-        client.BaseAddress = new Uri("https://localhost:7001/"); // API服务的开发环境地址
+        client.BaseAddress = new Uri("https://apisercie-drone/"); // API服务的开发环境地址
     }
     else
     {
@@ -61,7 +59,7 @@ builder.Services.AddHttpClient("HistoryApi", client =>
 
 // 注册数据服务（改为Scoped以支持并发请求）
 builder.Services.AddScoped<HistoryApiService>();
-
+builder.Services.AddHttpContextAccessor();
 // 注册图片代理服务
 builder.Services.AddHttpClient<ImageProxyService>(client =>
 {
@@ -75,7 +73,7 @@ builder.Services.AddHttpClient<BlazorApp_Web.Controllers.ImageProxyController>("
 {
     if (builder.Environment.IsDevelopment())
     {
-        client.BaseAddress = new Uri("https://localhost:7001/");
+        client.BaseAddress = new Uri("https://apisercie-drone/");
     }
     else
     {

@@ -3,6 +3,7 @@ using ClassLibrary_Core.Data;
 using ClassLibrary_Core.Drone;
 using ClassLibrary_Core.Mission;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Configuration;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;

@@ -45,10 +45,6 @@ namespace ClassLibrary_Core.Mission
         /// 子任务分配的无人机
         /// </summary>
         public string AssignedDrone { get; set; }
-        /// <summary>
-        /// 子任务处理结果图片路径列表（向后兼容）
-        /// </summary>
-        public List<string> ImagePaths { get; set; } = new List<string>();
         
         /// <summary>
         /// 子任务处理结果图片数据列表（存储在数据库中）
@@ -79,7 +75,7 @@ namespace ClassLibrary_Core.Mission
         /// </summary>
         public string GetImageListApiUrl()
         {
-            return $"/api/Tasks/subtask/{Id}/images";
+            return $"/api/ImageProxy/view/{Id}";
         }
 
         /// <summary>

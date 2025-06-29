@@ -81,7 +81,7 @@ namespace ClassLibrary_Core.Data
         /// <returns>图片下载URL</returns>
         public string GetDownloadUrl()
         {
-            return $"/api/Tasks/images/{Id}/image";
+            return $"/api/ImageProxy/view/{Id}";
         }
 
         /// <summary>
@@ -90,7 +90,7 @@ namespace ClassLibrary_Core.Data
         /// <returns>缩略图URL</returns>
         public string GetThumbnailUrl()
         {
-            return $"/api/Tasks/images/{Id}/thumbnail";
+            return $"/api/ImageProxy/thumbnail/{Id}";
         }
 
         /// <summary>

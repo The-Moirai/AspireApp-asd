@@ -38,13 +38,12 @@ namespace BlazorApp_Web.Service
                     await _hubContext.Clients.All.SendAsync("ReceiveTaskPosition", tasks, cancellationToken: stoppingToken);
 
                     // 🖼️ 推送最近的图片更新（每5秒检查一次新图片）
-                    await PushRecentImageUpdates(stoppingToken);
+                    //await PushRecentImageUpdates(stoppingToken);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "推送任务数据时发生异常");
                 }
-
                 await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); // 每5秒推送一次，降低CPU占用
             }
         }
@@ -60,7 +59,7 @@ namespace BlazorApp_Web.Service
                 
                 // 获取最近5分钟的图片更新
                 var recentImages = await client.GetFromJsonAsync<List<object>>(
-                    "api/Tasks/images/recent?minutes=5&limit=20", cancellationToken);
+                    "api/Tasks/images/recent", cancellationToken);
 
                 if (recentImages != null && recentImages.Any())
                 {
@@ -75,11 +74,25 @@ namespace BlazorApp_Web.Service
             }
         }
 
-        private async Task<List<MainTask>> GetTasksAsync()
+        private async Task<List<MainTask>?> GetTasksAsync()
         {
-            var client = _httpClientFactory.CreateClient("ApiService");
-            var tasks = await client.GetFromJsonAsync<List<MainTask>>("api/tasks") ?? new List<MainTask>();
-            return tasks;
+            try
+            {
+                var client = _httpClientFactory.CreateClient("ApiService");
+                client.Timeout = TimeSpan.FromSeconds(10);
+                var tasks = await client.GetFromJsonAsync<List<MainTask>>("api/tasks");
+                return tasks ?? new List<MainTask>();
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogWarning(ex, "无法连接到API服务");
+                return null;
+            }
+            catch (TaskCanceledException ex) when (ex.InnerException is TimeoutException)
+            {
+                _logger.LogWarning("API请求超时");
+                return null;
+            }
         }
     }
 } 

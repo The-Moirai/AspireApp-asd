@@ -26,10 +26,10 @@ namespace BlazorApp_Web.Service
         {
             try
             {
-                var response = await _http.GetAsync("api/historydata/drones/all");
+                var response = await _http.GetAsync("api/drones");
                 response.EnsureSuccessStatusCode();
-                var result = await response.Content.ReadFromJsonAsync<ApiResponse<List<Drone>>>();
-                return result?.Data ?? new List<Drone>();
+                var result = await response.Content.ReadFromJsonAsync<List<Drone>>();
+                return result ?? new List<Drone>();
             }
             catch (Exception ex)
             {
@@ -83,10 +83,10 @@ namespace BlazorApp_Web.Service
         {
             try
             {
-                var response = await _http.GetAsync($"api/historydata/drone/{droneId}");
+                var response = await _http.GetAsync($"api/drones/{droneId}");
                 response.EnsureSuccessStatusCode();
-                var result = await response.Content.ReadFromJsonAsync<ApiResponse<Drone>>();
-                return result?.Data;
+                var result = await response.Content.ReadFromJsonAsync<Drone>();
+                return result;
             }
             catch (Exception ex)
             {
@@ -163,10 +163,10 @@ namespace BlazorApp_Web.Service
         {
             try
             {
-                var response = await _http.GetAsync("api/historydata/tasks/all");
+                var response = await _http.GetAsync("api/tasks");
                 response.EnsureSuccessStatusCode();
-                var result = await response.Content.ReadFromJsonAsync<ApiResponse<List<MainTask>>>();
-                return result?.Data ?? new List<MainTask>();
+                var result = await response.Content.ReadFromJsonAsync<List<MainTask>>();
+                return result ?? new List<MainTask>();
             }
             catch (Exception ex)
             {
@@ -182,10 +182,10 @@ namespace BlazorApp_Web.Service
         {
             try
             {
-                var response = await _http.GetAsync($"api/historydata/task/{taskId}");
+                var response = await _http.GetAsync($"api/tasks/{taskId}");
                 response.EnsureSuccessStatusCode();
-                var result = await response.Content.ReadFromJsonAsync<ApiResponse<MainTask>>();
-                return result?.Data;
+                var result = await response.Content.ReadFromJsonAsync<MainTask>();
+                return result;
             }
             catch (Exception ex)
             {
@@ -220,10 +220,10 @@ namespace BlazorApp_Web.Service
         {
             try
             {
-                var response = await _http.GetAsync($"api/historydata/task/{taskId}/subtasks");
+                var response = await _http.GetAsync($"api/tasks/{taskId}/subtasks");
                 response.EnsureSuccessStatusCode();
-                var result = await response.Content.ReadFromJsonAsync<ApiResponse<List<SubTask>>>();
-                return result?.Data ?? new List<SubTask>();
+                var result = await response.Content.ReadFromJsonAsync<List<SubTask>>();
+                return result ?? new List<SubTask>();
             }
             catch (Exception ex)
             {

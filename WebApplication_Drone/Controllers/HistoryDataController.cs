@@ -3,6 +3,10 @@ using Microsoft.AspNetCore.Mvc;
 using WebApplication_Drone.Services;
 using ClassLibrary_Core.Data;
 using ClassLibrary_Core.Mission;
+using ClassLibrary_Core.Drone;
+using WebApplication_Drone.Services.Clean;
+using System.Text.Json;
+using Microsoft.Extensions.Logging;
 
 namespace WebApplication_Drone.Controllers
 {
@@ -10,15 +14,18 @@ namespace WebApplication_Drone.Controllers
     [ApiController]
     public class HistoryDataController : ControllerBase
     {
-        private readonly DroneDataService _droneDataService;
-        private readonly TaskDataService _taskDataService;
+        private readonly DroneService _droneService;
+        private readonly TaskService _taskService;
+        private readonly ILogger<HistoryDataController> _logger;
 
         public HistoryDataController(
-            DroneDataService droneDataService,
-            TaskDataService taskDataService)
+            DroneService droneService,
+            TaskService taskService,
+            ILogger<HistoryDataController> logger)
         {
-            _droneDataService = droneDataService;
-            _taskDataService = taskDataService;
+            _droneService = droneService;
+            _taskService = taskService;
+            _logger = logger;
         }
 
         #region 无人机历史数据查询
@@ -31,7 +38,7 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                var data = await _droneDataService.GetRecentDroneDataAsync(droneId, duration);
+                var data = await _droneService.GetRecentDroneDataAsync(droneId, duration);
                 return Ok(new { success = true, data });
             }
             catch (Exception ex)
@@ -48,7 +55,7 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                var data = await _droneDataService.GetDroneTaskDataAsync(droneId, taskId);
+                var data = await _droneService.GetDroneTaskDataAsync(droneId, taskId);
                 return Ok(new { success = true, data });
             }
             catch (Exception ex)
@@ -63,7 +70,7 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                var history = _droneDataService.GetDrones();
+                var history = _droneService.GetDrones();
                 return Ok(new { success = true, data = history });
             }
             catch (Exception ex)
@@ -78,7 +85,7 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                var drone = _droneDataService.GetDrone(droneId);
+                var drone = _droneService.GetDrone(droneId);
                 if (drone == null)
                     return NotFound(new { success = false, message = "无人机未找到" });
 
@@ -96,7 +103,7 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                var subTasks = _droneDataService.GetSubTasks(droneId);
+                var subTasks = _droneService.GetSubTasks(droneId);
                 return Ok(new { success = true, data = subTasks });
             }
             catch (Exception ex)
@@ -117,7 +124,7 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                var data = await _taskDataService.GetTaskDroneDataAsync(taskId, droneId);
+                var data = await _taskService.GetTaskDroneDataAsync(taskId, droneId);
                 return Ok(new { success = true, data });
             }
             catch (Exception ex)
@@ -132,7 +139,7 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                var data = await _taskDataService.GetTaskAllDronesDataAsync(taskId);
+                var data = await _taskService.GetTaskAllDronesDataAsync(taskId);
                 return Ok(new { success = true, data });
             }
             catch (Exception ex)
@@ -147,7 +154,7 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                var tasks = _taskDataService.GetTasks();
+                var tasks = _taskService.GetTasks();
                 return Ok(new { success = true, data = tasks });
             }
             catch (Exception ex)
@@ -162,7 +169,7 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                var task = _taskDataService.GetTask(taskId);
+                var task = _taskService.GetTask(taskId);
                 if (task == null)
                     return NotFound(new { success = false, message = "任务未找到" });
 
@@ -183,7 +190,7 @@ namespace WebApplication_Drone.Controllers
                 if (!Enum.IsDefined(typeof(TaskStatus), status))
                     return BadRequest(new { success = false, message = "无效的任务状态" });
 
-                var tasks = _taskDataService.GetTasksByStatus((TaskStatus)status);
+                var tasks = _taskService.GetTasksByStatus((TaskStatus)status);
                 return Ok(new { success = true, data = tasks });
             }
             catch (Exception ex)
@@ -198,7 +205,7 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                var subTasks = _taskDataService.GetSubTasks(taskId);
+                var subTasks = _taskService.GetSubTasks(taskId);
                 return Ok(new { success = true, data = subTasks });
             }
             catch (Exception ex)
@@ -222,7 +229,7 @@ namespace WebApplication_Drone.Controllers
                 if (startTime >= endTime)
                     return BadRequest(new { success = false, message = "开始时间必须早于结束时间" });
 
-                var data = await _droneDataService.GetAllDronesDataInTimeRangeAsync(startTime, endTime);
+                var data = await _droneService.GetAllDronesDataInTimeRangeAsync(startTime, endTime);
                 return Ok(new { success = true, data, timeRange = new { startTime, endTime } });
             }
             catch (Exception ex)
@@ -242,7 +249,7 @@ namespace WebApplication_Drone.Controllers
                 if (startTime >= endTime)
                     return BadRequest(new { success = false, message = "开始时间必须早于结束时间" });
 
-                var data = await _taskDataService.GetAllTasksDataInTimeRangeAsync(startTime, endTime);
+                var data = await _taskService.GetAllTasksDataInTimeRangeAsync(startTime, endTime);
                 return Ok(new { success = true, data, timeRange = new { startTime, endTime } });
             }
             catch (Exception ex)
@@ -261,7 +268,7 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                var statistics = _taskDataService.GetTaskStatistics();
+                var statistics = _taskService.GetTaskStatistics();
                 return Ok(new { success = true, data = statistics });
             }
             catch (Exception ex)
@@ -276,7 +283,7 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                var analysis = _taskDataService.GetTaskPerformanceAnalysis();
+                var analysis = _taskService.GetTaskPerformanceAnalysis();
                 return Ok(new { success = true, data = analysis });
             }
             catch (Exception ex)
@@ -291,7 +298,7 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                var activeTasks = _taskDataService.GetActiveSubTasksForDrone(droneName);
+                var activeTasks = _taskService.GetActiveSubTasksForDrone(droneName);
                 return Ok(new { success = true, data = activeTasks, droneName });
             }
             catch (Exception ex)
@@ -307,7 +314,7 @@ namespace WebApplication_Drone.Controllers
             try
             {
                 var timeout = TimeSpan.FromMinutes(timeoutMinutes);
-                var expiredTasks = _taskDataService.GetExpiredSubTasks(timeout);
+                var expiredTasks = _taskService.GetExpiredSubTasks(timeout);
                 return Ok(new { 
                     success = true, 
                     data = expiredTasks, 
@@ -331,7 +338,7 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                await _taskDataService.LoadTasksFromDatabaseAsync();
+                await _taskService.LoadTasksFromDatabaseAsync();
                 return Ok(new { success = true, message = "任务数据已从数据库加载" });
             }
             catch (Exception ex)
@@ -346,7 +353,7 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                await _taskDataService.SyncAllTasksToDatabaseAsync();
+                await _taskService.SyncAllTasksToDatabaseAsync();
                 return Ok(new { success = true, message = "任务数据已同步到数据库" });
             }
             catch (Exception ex)
@@ -361,7 +368,7 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                var count = await _taskDataService.ReassignFailedSubTasksAsync();
+                var count = await _taskService.ReassignFailedSubTasksAsync();
                 return Ok(new { 
                     success = true, 
                     message = $"已重新分配 {count} 个失败的子任务",
@@ -381,7 +388,7 @@ namespace WebApplication_Drone.Controllers
             try
             {
                 var maxAge = TimeSpan.FromDays(maxAgeDays);
-                var count = await _taskDataService.CleanupOldCompletedTasksAsync(maxAge);
+                var count = await _taskService.CleanupOldCompletedTasksAsync(maxAge);
                 return Ok(new { 
                     success = true, 
                     message = $"已清理 {count} 个超过 {maxAgeDays} 天的已完成任务",
@@ -408,7 +415,7 @@ namespace WebApplication_Drone.Controllers
                 if (!Enum.IsDefined(typeof(TaskStatus), request.NewStatus))
                     return BadRequest(new { success = false, message = "无效的任务状态" });
 
-                var count = await _taskDataService.BatchUpdateSubTaskStatusAsync(
+                var count = await _taskService.BatchUpdateSubTaskStatusAsync(
                     request.SubTaskIds, request.NewStatus, request.Reason);
 
                 return Ok(new { 
@@ -433,10 +440,10 @@ namespace WebApplication_Drone.Controllers
         {
             try
             {
-                var drones = _droneDataService.GetDrones();
-                var tasks = _taskDataService.GetTasks();
-                var taskStats = _taskDataService.GetTaskStatistics();
-                var performanceAnalysis = _taskDataService.GetTaskPerformanceAnalysis();
+                var drones = _droneService.GetDrones();
+                var tasks = _taskService.GetTasks();
+                var taskStats = _taskService.GetTaskStatistics();
+                var performanceAnalysis = _taskService.GetTaskPerformanceAnalysis();
 
                 var overview = new
                 {

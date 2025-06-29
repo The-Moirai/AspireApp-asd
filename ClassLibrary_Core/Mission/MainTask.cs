@@ -7,6 +7,10 @@
         /// </summary>
         public Guid Id { get; set; } = Guid.NewGuid();
         /// <summary>
+        /// 大任务的名称
+        /// </summary>
+        public string Name { get; set; }
+        /// <summary>
         /// 大任务的描述信息
         /// </summary>
         public string Description { get; set; }
@@ -18,6 +22,10 @@
         /// 大任务的创建时间
         /// </summary>
         public DateTime CreationTime { get; set; } = DateTime.Now;
+        /// <summary>
+        /// 大任务的开始时间
+        /// </summary>
+        public DateTime? StartTime { get; set; }
         /// <summary>
         /// 大任务的完成时间
         /// </summary>
