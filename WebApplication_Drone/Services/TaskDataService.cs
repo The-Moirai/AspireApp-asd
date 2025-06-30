@@ -436,6 +436,7 @@ namespace WebApplication_Drone.Services
                 var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
                 if (subTask == null) return false;
 
+                var oldDroneName = subTask.AssignedDrone;
                 subTask.AssignedDrone = null;
                 subTask.Status = TaskStatus.WaitingForActivation;
                 subTask.AssignedTime = null;
@@ -448,9 +449,21 @@ namespace WebApplication_Drone.Services
                 {
                     try
                     {
+                        // 更新子任务状态
                         await _sqlserverService.UpdateSubTaskAsync(subTaskSnapshot);
-                        // 更新DroneSubTasks表，设置IsActive = 0
-                        // 这个操作在SqlserverService中的SyncDroneSubTasksAsync中处理
+
+                        // 如果之前有分配的无人机，更新DroneSubTasks表
+                        if (!string.IsNullOrEmpty(oldDroneName))
+                        {
+                            var drone = await _sqlserverService.GetDroneByNameAsync(oldDroneName);
+                            if (drone != null)
+                            {
+                                // 清空无人机的子任务分配
+                                await _sqlserverService.SyncDroneSubTasksInTransaction(drone, new List<SubTask>());
+                            }
+                        }
+
+                        _logger.LogInformation("子任务卸载成功：SubTaskId={SubTaskId}, OldDrone={OldDroneName}", subTaskId, oldDroneName);
                     }
                     catch (Exception ex)
                     {
@@ -473,6 +486,7 @@ namespace WebApplication_Drone.Services
                 var subTask = mainTask.SubTasks.FirstOrDefault(st => st.Id == subTaskId);
                 if (subTask == null) return false;
 
+                var oldDroneName = subTask.AssignedDrone;
                 subTask.AssignedDrone = droneName;
                 subTask.Status = TaskStatus.Running;
                 subTask.AssignedTime = DateTime.Now;
@@ -484,8 +498,22 @@ namespace WebApplication_Drone.Services
                 {
                     try
                     {
+                        // 获取新无人机
+                        var newDrone = await _sqlserverService.GetDroneByNameAsync(droneName);
+                        if (newDrone == null)
+                        {
+                            _logger.LogError("重装子任务失败：找不到无人机 {DroneName}", droneName);
+                            return;
+                        }
+
+                        // 更新子任务状态
                         await _sqlserverService.UpdateSubTaskAsync(subTaskSnapshot);
-                        // 这里应该找到对应的DroneId并更新DroneSubTasks表
+
+                        // 更新DroneSubTasks表
+                        await _sqlserverService.SyncDroneSubTasksInTransaction(newDrone, new List<SubTask> { subTaskSnapshot });
+
+                        _logger.LogInformation("子任务重装成功：SubTaskId={SubTaskId}, OldDrone={OldDroneName}, NewDrone={NewDroneName}", 
+                            subTaskId, oldDroneName, droneName);
                     }
                     catch (Exception ex)
                     {
@@ -518,7 +546,21 @@ namespace WebApplication_Drone.Services
                 {
                     try
                     {
+                        // 获取无人机ID
+                        var drone = await _sqlserverService.GetDroneByNameAsync(droneName);
+                        if (drone == null)
+                        {
+                            _logger.LogError("分配子任务失败：找不到无人机 {DroneName}", droneName);
+                            return;
+                        }
+
+                        // 更新子任务状态
                         await _sqlserverService.UpdateSubTaskAsync(subTaskSnapshot);
+
+                        // 更新DroneSubTasks表
+                        await _sqlserverService.SyncDroneSubTasksInTransaction(drone, new List<SubTask> { subTaskSnapshot });
+
+                        _logger.LogInformation("子任务分配成功：SubTaskId={SubTaskId}, Drone={DroneName}", subTaskId, droneName);
                     }
                     catch (Exception ex)
                     {
@@ -607,21 +649,28 @@ namespace WebApplication_Drone.Services
         /// </summary>
         /// <param name="mainTaskId">主任务Guid</param>
         /// <param name="subTask">子任务实体</param>
-        public void addSubTasks(Guid mainTaskId, SubTask subTask)
+        public async Task addSubTasks(Guid mainTaskId, SubTask subTask)
         {
             lock (_rwLock)
             {
                 if (_tasks.ContainsKey(mainTaskId))
                 {
                     var mainTask = _tasks[mainTaskId];
+                    
+                    // 检查是否已存在相同描述的子任务
+                    var existingSubTask = mainTask.SubTasks.FirstOrDefault(st => st.Description == subTask.Description);
+                    if (existingSubTask != null)
+                    {
+                        _logger.LogWarning("子任务已存在于内存中，跳过添加: TaskId={TaskId}, Description={Description}", 
+                            mainTaskId, subTask.Description);
+                        return;
+                    }
+
                     subTask.ParentTask = mainTaskId; // 确保设置父任务ID
                     subTask.CreationTime = DateTime.Now; // 确保设置创建时间
                     subTask.AssignedTime = DateTime.Now;
 
                     mainTask.SubTasks.Add(subTask);
-
-                    // 触发任务变更事件
-                    //OnDroneChanged("update", mainTask);
 
                     // 异步同步到数据库 - 创建快照避免集合修改异常
                     var subTaskSnapshot = CloneSubTask(subTask);

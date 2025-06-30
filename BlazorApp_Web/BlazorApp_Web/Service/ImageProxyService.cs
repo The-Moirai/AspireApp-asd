@@ -9,11 +9,23 @@ namespace BlazorApp_Web.Service
     {
         private readonly HttpClient _httpClient;
         private readonly ILogger<ImageProxyService> _logger;
+        private readonly IHttpContextAccessor _httpContextAccessor;
 
-        public ImageProxyService(HttpClient httpClient, ILogger<ImageProxyService> logger)
+
+        public ImageProxyService(HttpClient httpClient, ILogger<ImageProxyService> logger, IHttpContextAccessor httpContextAccessor)
         {
             _httpClient = httpClient;
             _logger = logger;
+            _httpContextAccessor = httpContextAccessor;
+        }
+        private string GetAbsoluteUrl(string relativePath)
+        {
+            var request = _httpContextAccessor.HttpContext?.Request;
+            if (request == null)
+                throw new InvalidOperationException("No active HTTP request context.");
+
+            var baseUrl = $"{request.Scheme}://{request.Host}";
+            return $"{baseUrl}/{relativePath.TrimStart('/')}";
         }
 
         /// <summary>
@@ -26,8 +38,8 @@ namespace BlazorApp_Web.Service
             try
             {
                 _logger.LogDebug("获取子任务图片列表: SubTaskId={SubTaskId}", subTaskId);
-
-                var response = await _httpClient.GetAsync($"api/ImageProxy/subtask/{subTaskId}/images");
+                var url= GetAbsoluteUrl($"api/ImageProxy/subtask/{subTaskId}/images");
+                var response = await _httpClient.GetAsync(url);
 
                 if (!response.IsSuccessStatusCode)
                 {

@@ -193,7 +193,8 @@ var creationScript = $$"""
     -- 2. 自动记录历史触发器
     -------------------------------------------
 
-    CREATE TRIGGER TR_SubTasks_StatusChange
+    -- 子任务状态变更触发器
+    CREATE TRIGGER TR_SubTasks_StateChange
     ON SubTasks
     AFTER UPDATE
     AS
@@ -203,6 +204,15 @@ var creationScript = $$"""
         -- 只处理状态变化的记录
         IF UPDATE(Status)
         BEGIN
+            -- 获取最新的状态记录
+            WITH LatestHistory AS (
+                SELECT 
+                    SubTaskId,
+                    NewStatus,
+                    ChangeTime,
+                    ROW_NUMBER() OVER (PARTITION BY SubTaskId ORDER BY ChangeTime DESC) as rn
+                FROM SubTaskHistory
+            )
             INSERT INTO SubTaskHistory (
                 SubTaskId, 
                 OldStatus, 
@@ -214,23 +224,28 @@ var creationScript = $$"""
             )
             SELECT 
                 i.Id,
-                d.Status,           -- 原状态
-                i.Status,           -- 新状态
+                CASE 
+                    -- 如果有最近的历史记录，使用其状态作为旧状态
+                    WHEN lh.NewStatus IS NOT NULL THEN lh.NewStatus
+                    -- 否则使用deleted表中的状态
+                    ELSE d.Status
+                END as OldStatus,
+                i.Status as NewStatus,
                 GETUTCDATE(),
-                SUSER_SNAME(),      -- 当前用户
-                (SELECT TOP 1 DroneId 
-                 FROM DroneSubTasks 
-                 WHERE SubTaskId = i.Id 
-                 AND IsActive = 1 
-                 ORDER BY AssignmentTime DESC),  -- 当前分配的无人机
+                SUSER_SNAME(),
+                i.AssignedDrone,
                 CASE 
                     WHEN i.Status = 7 THEN '任务失败' 
                     WHEN i.Status = 6 THEN '任务取消'
                     WHEN i.Status = 5 THEN '任务完成'
-                    ELSE '状态更新' 
+                    WHEN i.Status = 3 THEN '任务运行中'
+                    WHEN i.Status = 2 THEN '任务等待运行'
+                    WHEN i.Status = 1 THEN '任务等待激活'
+                    ELSE '状态更新'
                 END
             FROM inserted i
             JOIN deleted d ON i.Id = d.Id
+            LEFT JOIN LatestHistory lh ON lh.SubTaskId = i.Id AND lh.rn = 1
             WHERE i.Status <> d.Status; -- 仅状态变化时记录
         END
     END;

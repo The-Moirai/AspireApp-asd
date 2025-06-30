@@ -1,10 +1,51 @@
 ﻿@page "/drone_map"
 @rendermode InteractiveServer
 @using ClassLibrary_Core.Drone
+@using ClassLibrary_Core.Common
 @using Microsoft.AspNetCore.SignalR.Client
 @using Microsoft.Extensions.Logging
 @inject NavigationManager Navigation
 @inject ILogger<Drone_Map> Logger
+@inject IJSRuntime JSRuntime
+
+<style>
+    .drone-group {
+        transition: transform 2s ease-in-out;
+    }
+    
+    .drone-icon {
+        transition: all 1.5s ease-in-out;
+    }
+
+    .connection-path {
+        transition: all 2s ease-in-out;
+        fill: none;
+        stroke: orange;
+        stroke-width: 1.5;
+    }
+
+    .drone-label {
+        transition: all 1.5s ease-in-out;
+        font-size: 10px;
+    }
+
+    .info-box {
+        transition: opacity 0.3s ease;
+    }
+
+    .drone-group:hover .drone-icon {
+        filter: brightness(1.2);
+    }
+
+    .drone-group:hover .drone-label {
+        font-weight: bold;
+    }
+
+    .selected-drone {
+        filter: drop-shadow(0 0 4px #4CAF50);
+    }
+</style>
+
 <h3>Drone_Map</h3>
 @if (drones == null)
 {
@@ -16,58 +57,87 @@ else
     <div class="map-viewport"
          style="width:1200px;height:800px;border:1px solid #ccc;position:relative;">
         <svg width="1200" height="800">
-                @foreach (var drone in drones.Where(d => !showOnlyConnected || visibleDroneIds.Contains(d.Id)))
+            @foreach (var drone in drones.Where(d => !showOnlyConnected || visibleDroneIds.Contains(d.Id)))
+            {
+                var current = drone;
+                @foreach (var adjId in current.ConnectedDroneIds)
                 {
-                    var current = drone;
-                    @foreach (var adjId in current.ConnectedDroneIds)
+                    var adjacent = drones.FirstOrDefault(d => d.Id == adjId);
+                    if (adjacent?.CurrentPosition != null && 
+                        current.Status != DroneStatus.Offline && 
+                        adjacent.Status != DroneStatus.Offline &&
+                        (!showOnlyConnected || visibleDroneIds.Contains(adjId)))
                     {
-                        if (!showOnlyConnected || visibleDroneIds.Contains(adjId))
-                        {
-                            var adjacent = drones.FirstOrDefault(d => d.Id == adjId);
-                            if (adjacent?.CurrentPosition != null)
-                            {
-                                <line x1="@current.CurrentPosition.Latitude_x" y1="@current.CurrentPosition.Longitude_y"
-                                      x2="@adjacent.CurrentPosition.Latitude_x" y2="@adjacent.CurrentPosition.Longitude_y"
-                                      stroke="orange" stroke-width="2" />
-                            }
-                        }
+                        var pathId = $"path_{current.Id}_{adjacent.Id}";
+                        var x1 = current.CurrentPosition.Latitude_x;
+                        var y1 = current.CurrentPosition.Longitude_y;
+                        var x2 = adjacent.CurrentPosition.Latitude_x;
+                        var y2 = adjacent.CurrentPosition.Longitude_y;
+                        var pathData = $"M {x1} {y1} L {x2} {y2}";
+                        
+                        <path id="@pathId"
+                              class="connection-path"
+                              d="@pathData" />
                     }
                 }
-        }
-        @foreach (var drone in drones.Where(d => !showOnlyConnected || visibleDroneIds.Contains(d.Id)))
-        {
-            if (drone.CurrentPosition != null)
-            {
-                var img = GetDroneImage(drone.ModelStatus);
-                var color = GetStatusColor(drone.Status);
-                <image href="@img"
-                       x="@(drone.CurrentPosition.Latitude_x - 16)"
-                       y="@(drone.CurrentPosition.Longitude_y - 16)"
-                       width="32" height="32"
-                               style="stroke:@color;stroke-width:@(drone.Id == SelectedDrone?.Id ? "4" : "2");
-                          opacity:@(drone.Id == SelectedDrone?.Id ? "1" : "0.8")" />
-                <circle cx="@drone.CurrentPosition.Latitude_x"
-                        cy="@drone.CurrentPosition.Longitude_y"
-                        r="18"
-                        fill="none"
-                        stroke="@color"
-                        stroke-width="3" />
-                <label x="@(drone.CurrentPosition.Latitude_x + 15)"
-                      y="@(drone.CurrentPosition.Longitude_y + 5)"
-                      font-size="14"
-                      fill="black">
-                    @drone.Name
-                </label>
             }
-        }
+        
+            @foreach (var drone in drones.Where(d => !showOnlyConnected || visibleDroneIds.Contains(d.Id)))
+            {
+                if (drone.CurrentPosition != null)
+                {
+                    var img = GetDroneImage(drone.ModelStatus);
+                    var color = GetStatusColor(drone.Status);
+                    var isSelected = drone.Id == SelectedDrone?.Id;
+                    <g class="drone-group @(isSelected ? "selected-drone" : "")" 
+                       @onmouseover="() => ShowDroneDetails(drone)" 
+                       @onmouseout="HideDroneDetails"
+                       @onclick="() => SelectDrone(drone.Id.ToString())"
+                       style="cursor: pointer;"
+                       transform="translate(@(drone.CurrentPosition.Latitude_x - 16),@(drone.CurrentPosition.Longitude_y - 16))">
+                        <!-- 无人机图标 -->
+                        <image class="drone-icon"
+                               href="@img"
+                               width="32" height="32"
+                               style="stroke:@color;stroke-width:@(isSelected ? "4" : "2");
+                                      opacity:@(isSelected ? "1" : "0.8")" />
+                        <!-- 状态圆圈 -->
+                        <circle class="drone-icon"
+                                cx="16" cy="16"
+                                r="18"
+                                fill="none"
+                                stroke="@color"
+                                stroke-width="3" />
+                    </g>
+
+                    @if (hoveredDrone == drone)
+                    {
+                        <g class="info-box" 
+                           transform="translate(@(drone.CurrentPosition.Latitude_x + 25),@(drone.CurrentPosition.Longitude_y - 40))">
+                            <!-- 详细信息背景 -->
+                            <rect x="0" y="0"
+                                  width="160" height="80"
+                                  fill="white"
+                                  stroke="gray"
+                                  rx="5" ry="5"
+                                  opacity="0.9"/>
+                            <!-- 详细信息文本 -->
+                            <text x="10" y="20" font-size="12">名称: @drone.Name</text>
+                            <text x="10" y="40" font-size="12">状态: @drone.Status</text>
+                            <text x="10" y="60" font-size="12">CPU: @drone.cpu_used_rate%</text>
+                            <text x="10" y="75" font-size="12">内存: @drone.memory MB</text>
+                        </g>
+                    }
+                }
+            }
         </svg>
     </div>
     <!-- 控制面板 (20%宽度) -->
     <div class="control-panel">
         <h3>无人机控制</h3>    
-        <select class="drone-selector" @bind="selectedDroneId">
+        <select class="drone-selector" @bind="selectedDroneId" id="droneSelector">
             <option value="">-- 选择无人机 --</option>
-            @foreach(var drone in drones)          
+            @foreach(var drone in drones.OrderBy(d => ParseIPAndPort(d.Name)))          
             {
                <option value="@drone.Id">@drone.Name </option>
             }
@@ -92,12 +162,14 @@ else
 @code { 
     private HubConnection? hubConnection;
     private List<Drone> drones = new();
+    private Dictionary<Guid, GPSPosition> lastPositions = new();
     private string? selectedDroneId;
     private Drone? SelectedDrone => !string.IsNullOrEmpty(selectedDroneId) && Guid.TryParse(selectedDroneId, out var id)
         ? drones.FirstOrDefault(d => d.Id == id)
         : null;
     private bool showOnlyConnected = false;
     private HashSet<Guid> visibleDroneIds = new();
+    private Drone? hoveredDrone;
 
     private void ToggleShowConnected()
     {
@@ -130,8 +202,6 @@ else
                 }
             }
         }
-
-        StateHasChanged();
     }
 
     /// <summary>
@@ -146,10 +216,22 @@ else
 
         hubConnection.On<List<Drone>>("ReceiveDronesPosition", ds =>
         {
-            // 避免重复渲染和数据重复
-            if (ShouldUpdateDrones(ds))
+            if (ds != null)
             {
-                drones = ds?.Distinct().ToList() ?? new List<Drone>();
+                foreach (var drone in ds)
+                {
+                    // 如果无人机是离线状态，保持其最后已知位置
+                    if (drone.Status == DroneStatus.Offline && lastPositions.ContainsKey(drone.Id))
+                    {
+                        drone.CurrentPosition = lastPositions[drone.Id];
+                    }
+                    else if (drone.CurrentPosition != null)
+                    {
+                        // 更新最后已知位置
+                        lastPositions[drone.Id] = drone.CurrentPosition;
+                    }
+                }
+                drones = ds.Distinct().ToList();
                 UpdateVisibleDrones();
                 InvokeAsync(StateHasChanged);
             }
@@ -183,8 +265,9 @@ else
             if (existingDrone != null)
             {
                 if (existingDrone.Status != newDrone.Status ||
-                    existingDrone.CurrentPosition?.Latitude_x != newDrone.CurrentPosition?.Latitude_x ||
-                    existingDrone.CurrentPosition?.Longitude_y != newDrone.CurrentPosition?.Longitude_y)
+                    (existingDrone.Status != DroneStatus.Offline && // 如果不是离线状态，才检查位置变化
+                    (existingDrone.CurrentPosition?.Latitude_x != newDrone.CurrentPosition?.Latitude_x ||
+                    existingDrone.CurrentPosition?.Longitude_y != newDrone.CurrentPosition?.Longitude_y)))
                 {
                     return true;
                 }
@@ -267,5 +350,42 @@ else
         }
     }
 
+    private void ShowDroneDetails(Drone drone)
+    {
+        hoveredDrone = drone;
+        StateHasChanged();
+    }
+
+    private void HideDroneDetails()
+    {
+        hoveredDrone = null;
+        StateHasChanged();
+    }
+
+    private (string ip, int port) ParseIPAndPort(string name)
+    {
+        try
+        {
+            var parts = name.Split(':');
+            if (parts.Length == 2 && int.TryParse(parts[1], out int port))
+            {
+                return (parts[0], port);
+            }
+        }
+        catch { }
+        return (name, 0);
+    }
+
+    private void SelectDrone(string droneId)
+    {
+        selectedDroneId = droneId;
+        StateHasChanged();
+        
+        // 使用 JS 交互来滚动下拉列表到选中项
+        var js = "setTimeout(() => { const select = document.getElementById('droneSelector'); " +
+                "const option = Array.from(select.options).find(o => o.value === '" + droneId + "'); " +
+                "if (option) { option.scrollIntoView({ behavior: 'smooth', block: 'center' }); } }, 0);";
+        JSRuntime.InvokeVoidAsync("eval", js);
+    }
 }
 

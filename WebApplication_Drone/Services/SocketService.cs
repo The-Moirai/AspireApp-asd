@@ -8,6 +8,7 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Newtonsoft.Json.Linq;
 
 namespace WebApplication_Drone.Services
 {
@@ -31,8 +32,9 @@ namespace WebApplication_Drone.Services
         private readonly DroneDataService _droneDataService;
         private readonly ILogger<SocketService> _logger;
         private readonly System.Timers.Timer _timer;
+        private readonly SqlserverService _sqlserverService;
 
-        public SocketService(TaskDataService taskDataService, DroneDataService droneDataService, ILogger<SocketService> logger)
+        public SocketService(TaskDataService taskDataService, DroneDataService droneDataService, ILogger<SocketService> logger, SqlserverService sqlserverService)
         {
             _taskDataService = taskDataService;
             _taskDataService.TaskChanged += OnTaskChanged;
@@ -40,6 +42,7 @@ namespace WebApplication_Drone.Services
             _droneDataService.DroneChanged += OnDroneChanged;
 
             _logger = logger;
+            _sqlserverService = sqlserverService;
 
             _timer = new System.Timers.Timer(5000);
             _timer.Elapsed += async (s, e) => await FetchFromSocketAsync();
@@ -401,7 +404,7 @@ namespace WebApplication_Drone.Services
         /// content格式: { "节点名": ["子任务名1", "子任务名2", ...] }
         /// </summary>
         /// <param name="content"></param>
-        private void HandleTasksInfo(Dictionary<string, List<object>> content)
+        private async Task HandleTasksInfo(Dictionary<string, List<object>> content)
         {
             foreach (var nodeAssignment in content)
             {
@@ -473,7 +476,7 @@ namespace WebApplication_Drone.Services
         /// 注意：主任务必须已经存在，此方法不会自动创建主任务
         /// </summary>
         /// <param name="content"></param>
-        private void HandleSubtasksInfo(Dictionary<string, List<object>> content)
+        private async Task HandleSubtasksInfo(Dictionary<string, List<object>> content)
         {
             foreach (KeyValuePair<string, List<object>> groupInfo in content)
             {
@@ -512,10 +515,20 @@ namespace WebApplication_Drone.Services
                     {
                         string subTaskName = subTaskObj.ToString();
                         
-                        // 检查子任务是否已存在
+                        // 检查子任务是否已存在于数据库中
+                        var existingSubTask = await _sqlserverService.GetSubTaskByDescriptionAsync(mainTaskGuid, subTaskName);
+                        if (existingSubTask != null)
+                        {
+                            _logger.LogDebug("子任务已存在于数据库中: TaskId={TaskId}, Description={Description}", 
+                                mainTaskGuid, subTaskName);
+                            continue;
+                        }
+
+                        // 检查子任务是否已存在于内存中
                         if (mainTask.SubTasks.Any(st => st.Description == subTaskName))
                         {
-                            _logger.LogDebug("子任务已存在: {SubTaskName}", subTaskName);
+                            _logger.LogDebug("子任务已存在于内存中: TaskId={TaskId}, Description={Description}", 
+                                mainTaskGuid, subTaskName);
                             continue;
                         }
 
@@ -591,16 +604,26 @@ namespace WebApplication_Drone.Services
 
             for (int i = 0; i < nodesName.Count; i++)
             {
-                drones.Add(new Drone
+                var name = nodesName[i].ToString();
+                var existingDrone = _droneDataService.GetDroneByName(name);
+                
+                var drone = new Drone
                 {
-                    Id = Guid.NewGuid(), // 使用Guid.NewGuid()生成新的唯一标识符
-                    Name = nodesName[i].ToString(),
-                    Status = DroneStatus.Idle, // 默认状态
+                    Id = existingDrone?.Id ?? Guid.NewGuid(),
+                    Name = name,
+                    Status = existingDrone?.Status ?? DroneStatus.Idle,
                     CurrentPosition = new GPSPosition(x[i], y[i]),
                     cpu_used_rate = cpuUsedRate[i],
+                    radius = radius[i],
                     memory = memory[i],
                     left_bandwidth = leftBandwidth[i],
-                });
+                    ConnectedDroneIds = existingDrone?.ConnectedDroneIds ?? new List<Guid>(),
+                    AssignedSubTasks = existingDrone?.AssignedSubTasks ?? new List<SubTask>(),
+                    ModelStatus = existingDrone?.ModelStatus ?? ModelStatus.True,
+                    ModelType = existingDrone?.ModelType ?? string.Empty
+                };
+                
+                drones.Add(drone);
             }
                 
             return drones;

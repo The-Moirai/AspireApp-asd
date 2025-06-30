@@ -2,6 +2,7 @@
 using ClassLibrary_Core.Drone;
 using Microsoft.AspNetCore.SignalR;
 using System.Net.Http;
+using System.Text;
 
 namespace BlazorApp_Web.Service
 {
@@ -23,6 +24,8 @@ namespace BlazorApp_Web.Service
             _hubContext = hubContext;
             _httpClientFactory = httpClientFactory;
             _logger = logger;
+            // 设置默认编码
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -68,7 +71,6 @@ namespace BlazorApp_Web.Service
             try
             {
                 var client = _httpClientFactory.CreateClient("ApiService");
-                client.Timeout = TimeSpan.FromSeconds(10); // 设置较短的超时时间
                 var drones = await client.GetFromJsonAsync<List<Drone>>("api/drones");
                 return drones ?? new List<Drone>();
             }

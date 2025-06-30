@@ -1,7 +1,8 @@
-using ClassLibrary_Core.Drone;
 using ClassLibrary_Core.Data;
+using ClassLibrary_Core.Drone;
 using ClassLibrary_Core.Mission;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
 
@@ -217,12 +218,15 @@ namespace WebApplication_Drone.Services
 
                 await Task.WhenAll(tasks);
 
+                // 处理在线无人机连接状态
                 var activeDrones = droneList.Where(d => d.Status != DroneStatus.Offline).ToList();
                 await UpdateDroneConnectionsAsync(activeDrones);
 
+                // 同步到数据库 - 新增的功能
                 var allDrones = updatedDrones.Concat(addedDrones);
                 await SyncDronesToDatabaseAsync(allDrones);
 
+                // 清除缓存
                 await InvalidateAllCachesAsync();
 
                 _logger.LogInformation("批量更新完成 - 更新: {UpdatedCount}, 新增: {AddedCount}", 
@@ -231,44 +235,41 @@ namespace WebApplication_Drone.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "批量更新无人机数据失败: {Message}", ex.Message);
+                throw; // 抛出异常以便调用者知道操作失败
             }
         }
 
-        private async Task ProcessDroneUpdateAsync(
-            Drone newDrone, 
-            ConcurrentBag<Drone> updatedDrones, 
-            ConcurrentBag<Drone> addedDrones,
-            SemaphoreSlim semaphore)
+        private async Task ProcessDroneUpdateAsync(Drone drone, ConcurrentBag<Drone> updatedDrones, ConcurrentBag<Drone> addedDrones, SemaphoreSlim semaphore)
         {
             await semaphore.WaitAsync();
             try
             {
-                await Task.Run(() =>
+                _rwLock.EnterWriteLock();
+                try
                 {
-                    _rwLock.EnterWriteLock();
-                    try
+                    if (_droneNameMapping.TryGetValue(drone.Name, out var existingId))
                     {
-                        if (_drones.TryGetValue(newDrone.Id, out var existingDrone))
+                        if (_drones.TryGetValue(existingId, out var existingDrone))
                         {
-                            var updatedDrone = UpdateDroneData(existingDrone, newDrone);
-                            _drones[newDrone.Id] = updatedDrone;
-                            _droneNameMapping[updatedDrone.Name] = updatedDrone.Id;
+                            var updatedDrone = UpdateDroneData(existingDrone, drone);
+                            _drones[existingId] = updatedDrone;
                             updatedDrones.Add(updatedDrone);
-                            OnDroneChanged("Update", updatedDrone);
-                        }
-                        else
-                        {
-                            _drones[newDrone.Id] = newDrone;
-                            _droneNameMapping[newDrone.Name] = newDrone.Id;
-                            addedDrones.Add(newDrone);
-                            OnDroneChanged("Add", newDrone);
+                            OnDroneChanged("update", updatedDrone);
                         }
                     }
-                    finally
+                    else
                     {
-                        _rwLock.ExitWriteLock();
+                        var clonedDrone = CloneDrone(drone);
+                        _drones[clonedDrone.Id] = clonedDrone;
+                        _droneNameMapping[clonedDrone.Name] = clonedDrone.Id;
+                        addedDrones.Add(clonedDrone);
+                        OnDroneChanged("add", clonedDrone);
                     }
-                });
+                }
+                finally
+                {
+                    _rwLock.ExitWriteLock();
+                }
             }
             finally
             {
@@ -283,20 +284,41 @@ namespace WebApplication_Drone.Services
                 _rwLock.EnterWriteLock();
                 try
                 {
+                    // 1. 先清除所有连接关系
                     foreach (var drone in _drones.Values)
                     {
                         drone.ConnectedDroneIds.Clear();
                     }
 
+                    // 2. 重新计算连接关系
                     foreach (var drone in activeDrones)
                     {
+                        if (drone.CurrentPosition == null) continue;
+                        
                         if (_drones.TryGetValue(drone.Id, out var currentDrone))
                         {
-                            currentDrone.ConnectedDroneIds = activeDrones
-                                .Where(d => d.Id != drone.Id && 
-                                       CalculateDistance(d.CurrentPosition, drone.CurrentPosition) <= drone.radius)
-                                .Select(d => d.Id)
-                                .ToList();
+                            // 对每个其他活跃无人机
+                            foreach (var otherDrone in activeDrones.Where(d => d.Id != drone.Id))
+                            {
+                                if (otherDrone.CurrentPosition == null) continue;
+                                
+                                // 计算距离
+                                var distance = CalculateDistance(drone.CurrentPosition, otherDrone.CurrentPosition);
+                                
+                                // 使用两者中较大的通信半径
+                                var maxRadius = Math.Max(drone.radius, otherDrone.radius);
+                                
+                                // 如果在通信范围内，建立双向连接
+                                if (distance <= maxRadius && !currentDrone.ConnectedDroneIds.Contains(otherDrone.Id))
+                                {
+                                    currentDrone.ConnectedDroneIds.Add(otherDrone.Id);
+                                    if (_drones.TryGetValue(otherDrone.Id, out var otherCurrentDrone) && 
+                                        !otherCurrentDrone.ConnectedDroneIds.Contains(drone.Id))
+                                    {
+                                        otherCurrentDrone.ConnectedDroneIds.Add(drone.Id);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -317,24 +339,47 @@ namespace WebApplication_Drone.Services
         {
             try
             {
-                var tasks = drones.Select(async drone =>
+                _logger.LogInformation("开始同步 {Count} 个无人机数据到数据库", drones.Count());
+
+                // 按名称分组，确保每个无人机只同步一次
+                var uniqueDrones = drones.GroupBy(d => d.Name)
+                    .Select(g => g.OrderByDescending(d => d.Status != DroneStatus.Offline)
+                                .First())
+                    .ToList();
+
+                foreach (var drone in uniqueDrones)
                 {
                     try
                     {
-                        await _sqlserverService.FullSyncDroneAsync(drone);
+                        // 先检查数据库中是否已存在该名称的无人机
+                        var existingDrone = await _sqlserverService.GetDroneByNameAsync(drone.Name);
+                        if (existingDrone != null)
+                        {
+                            // 使用已存在的ID
+                            drone.Id = existingDrone.Id;
+                            _logger.LogDebug("使用已存在的无人机ID: {DroneId} 用于 {DroneName}", existingDrone.Id, drone.Name);
+                        }
+
+                        await _sqlserverService.AddOrUpdateDroneAsync(drone);
+                        if (drone.Status != DroneStatus.Offline)
+                        {
+                            await _sqlserverService.RecordDroneStatusFromDroneAsync(drone);
+                        }
+                        _logger.LogDebug("同步无人机数据成功: {DroneName}", drone.Name);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "同步无人机到数据库失败 - DroneId: {DroneId}, Name: {Name}", 
-                            drone.Id, drone.Name);
+                        _logger.LogError(ex, "同步无人机数据失败: {DroneName}", drone.Name);
+                        // 继续处理下一个无人机，不中断整个同步过程
                     }
-                });
-                
-                await Task.WhenAll(tasks);
+                }
+
+                _logger.LogInformation("无人机数据同步完成，实际同步 {Count} 个无人机", uniqueDrones.Count);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "批量同步无人机到数据库失败: {Message}", ex.Message);
+                _logger.LogError(ex, "同步无人机数据到数据库时发生错误");
+                // 不抛出异常，因为内存中的数据已经更新成功
             }
         }
 
@@ -393,27 +438,61 @@ namespace WebApplication_Drone.Services
             return GetDroneByNameAsync(droneName).GetAwaiter().GetResult();
         }
 
-        public async void SetDrones(IEnumerable<Drone> drones)
+        public void SetDrones(IEnumerable<Drone> drones)
         {
-            await SetDronesAsync(drones);
+            if (drones == null) throw new ArgumentNullException(nameof(drones));
+
+            try
+            {
+                // 使用异步方法的同步版本
+                Task.Run(async () => await SetDronesAsync(drones)).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in SetDrones: {Message}", ex.Message);
+                throw;
+            }
         }
 
         private Drone UpdateDroneData(Drone existingDrone, Drone newDrone)
         {
             var updatedDrone = CloneDrone(existingDrone);
             
+            // 更新基本属性
             updatedDrone.ModelStatus = newDrone.ModelStatus;
-            updatedDrone.CurrentPosition = newDrone.CurrentPosition;
-            updatedDrone.Status = newDrone.Status;
             updatedDrone.cpu_used_rate = newDrone.cpu_used_rate;
             updatedDrone.radius = newDrone.radius;
             updatedDrone.left_bandwidth = newDrone.left_bandwidth;
             updatedDrone.memory = newDrone.memory;
             
+            // 如果是离线状态
             if (newDrone.Status == DroneStatus.Offline)
             {
+                // 清除任务和连接关系
                 updatedDrone.AssignedSubTasks.Clear();
+                updatedDrone.ConnectedDroneIds.Clear();
+                
+                // 如果是新设置为离线（状态发生变化），保持最后位置
+                if (existingDrone.Status != DroneStatus.Offline)
+                {
+                    updatedDrone.CurrentPosition = existingDrone.CurrentPosition;
+                }
+                else
+                {
+                    // 如果已经是离线状态，使用新的位置（如果有）
+                    updatedDrone.CurrentPosition = newDrone.CurrentPosition;
+                }
             }
+            else
+            {
+                // 非离线状态，更新所有数据
+                updatedDrone.CurrentPosition = newDrone.CurrentPosition;
+                updatedDrone.AssignedSubTasks = newDrone.AssignedSubTasks;
+                updatedDrone.ConnectedDroneIds = newDrone.ConnectedDroneIds;
+            }
+            
+            // 最后更新状态
+            updatedDrone.Status = newDrone.Status;
 
             return updatedDrone;
         }

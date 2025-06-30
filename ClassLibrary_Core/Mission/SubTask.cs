@@ -79,7 +79,7 @@ namespace ClassLibrary_Core.Mission
         /// </summary>
         public string GetImageListApiUrl()
         {
-            return $"/api/Tasks/subtask/{Id}/images";
+            return $"/api/ImageProxy/subtask/{Id}/images";
         }
 
         /// <summary>
@@ -87,7 +87,7 @@ namespace ClassLibrary_Core.Mission
         /// </summary>
         public string GetImageCountApiUrl()
         {
-            return $"/api/Tasks/subtask/{Id}/images-count";
+            return $"/api/ImageProxy/subtask/{Id}/images-count";
         }
 
         /// <summary>

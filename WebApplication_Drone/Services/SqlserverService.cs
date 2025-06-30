@@ -110,14 +110,14 @@ namespace WebApplication_Drone.Services
             }
         }
         // 无人机存在检查
-        public async Task<bool> DroneExistsAsync(Guid id, SqlConnection? connection = null)
+        public async Task<bool> DroneExistsAsync(Guid id, SqlConnection? connection = null, SqlTransaction? transaction = null)
         {
             var targetConnection = connection ?? await CreateConnectionAsync();
             var shouldDisposeConnection = connection == null;
             
             try
             {
-                var cmd = new SqlCommand("SELECT 1 FROM Drones WHERE Id=@id", targetConnection);
+                var cmd = new SqlCommand("SELECT 1 FROM Drones WHERE Id=@id", targetConnection, transaction);
                 cmd.Parameters.AddWithValue("@id", id);
                 return (await cmd.ExecuteScalarAsync()) != null;
             }
@@ -135,14 +135,13 @@ namespace WebApplication_Drone.Services
             
             try
             {
-                // 使用MERGE语句实现原子性的插入或更新操作，避免竞争条件
+                // 使用MERGE语句实现原子性的插入或更新操作，使用Name作为唯一标识
                 var mergeSql = @"
                     MERGE Drones AS target
                     USING (SELECT @id AS Id, @name AS Name, @modelStatus AS ModelStatus, @modelType AS ModelType, @now AS LastHeartbeat) AS source
-                    ON target.Id = source.Id
+                    ON target.Name = source.Name
                     WHEN MATCHED THEN
                         UPDATE SET 
-                            Name = source.Name,
                             ModelStatus = source.ModelStatus,
                             ModelType = source.ModelType,
                             LastHeartbeat = source.LastHeartbeat
@@ -154,14 +153,20 @@ namespace WebApplication_Drone.Services
                 cmd.Parameters.AddRange(new[]
                 {
                     new SqlParameter("@id", drone.Id),
-                    new SqlParameter("@name", drone.Name),
+                    new SqlParameter("@name", drone.Name ?? throw new ArgumentException("Drone name cannot be null")),
                     new SqlParameter("@modelStatus", (int)drone.ModelStatus),
-                    new SqlParameter("@modelType", drone.ModelType),
+                    new SqlParameter("@modelType", drone.ModelType ?? string.Empty),
                     new SqlParameter("@registrationDate", DateTime.Now),
                     new SqlParameter("@now", DateTime.Now)
                 });
 
                 await cmd.ExecuteNonQueryAsync();
+                _logger.LogDebug("Successfully merged drone {DroneName}", drone.Name);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error merging drone {DroneName}: {Message}", drone.Name, ex.Message);
+                throw;
             }
             finally
             {
@@ -471,29 +476,91 @@ namespace WebApplication_Drone.Services
         /// </summary>
         private async Task SyncDroneSubTasksInTransaction(Drone drone, SqlConnection connection, SqlTransaction transaction)
         {
-            // 停用当前无人机的所有任务分配
-            var deactivateSql = "UPDATE DroneSubTasks SET IsActive = 0 WHERE DroneId = @DroneId";
-            using var deactivateCmd = new SqlCommand(deactivateSql, connection, transaction);
-            deactivateCmd.CommandTimeout = 15;
-            deactivateCmd.Parameters.AddWithValue("@DroneId", drone.Id);
-            await deactivateCmd.ExecuteNonQueryAsync();
-
-            // 批量添加新的任务分配
-            var insertSql = @"
-                INSERT INTO DroneSubTasks (DroneId, SubTaskId, AssignmentTime, IsActive)
-                VALUES (@DroneId, @SubTaskId, @AssignmentTime, 1)";
-
-            foreach (var subTask in drone.AssignedSubTasks)
+            try
             {
-                using var insertCmd = new SqlCommand(insertSql, connection, transaction);
-                insertCmd.CommandTimeout = 15;
-                insertCmd.Parameters.AddRange(new[]
+                // 1. 停用当前无人机的所有任务分配
+                var deactivateSql = "UPDATE DroneSubTasks SET IsActive = 0 WHERE DroneId = @DroneId";
+                using var deactivateCmd = new SqlCommand(deactivateSql, connection, transaction);
+                deactivateCmd.CommandTimeout = 15;
+                deactivateCmd.Parameters.AddWithValue("@DroneId", drone.Id);
+                await deactivateCmd.ExecuteNonQueryAsync();
+
+                // 2. 批量添加新的任务分配
+                if (drone.AssignedSubTasks != null && drone.AssignedSubTasks.Any())
                 {
-                    new SqlParameter("@DroneId", drone.Id),
-                    new SqlParameter("@SubTaskId", subTask.Id),
-                    new SqlParameter("@AssignmentTime", DateTime.Now)
-                });
-                await insertCmd.ExecuteNonQueryAsync();
+                    var insertSql = @"
+                        INSERT INTO DroneSubTasks (DroneId, SubTaskId, AssignmentTime, IsActive)
+                        VALUES (@DroneId, @SubTaskId, @AssignmentTime, 1)";
+
+                    foreach (var subTask in drone.AssignedSubTasks)
+                    {
+                        using var insertCmd = new SqlCommand(insertSql, connection, transaction);
+                        insertCmd.CommandTimeout = 15;
+                        insertCmd.Parameters.AddRange(new[]
+                        {
+                            new SqlParameter("@DroneId", drone.Id),
+                            new SqlParameter("@SubTaskId", subTask.Id),
+                            new SqlParameter("@AssignmentTime", DateTime.Now)
+                        });
+                        await insertCmd.ExecuteNonQueryAsync();
+
+                        _logger.LogDebug("已为无人机 {DroneName} 分配子任务 {SubTaskId}", drone.Name, subTask.Id);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "同步无人机子任务关联失败: DroneId={DroneId}, Error={Message}", drone.Id, ex.Message);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// 在事务中同步无人机子任务关联（供外部调用）
+        /// </summary>
+        public async Task SyncDroneSubTasksInTransaction(Drone drone, List<SubTask> subTasks)
+        {
+            using var connection = await CreateConnectionAsync();
+            using var transaction = connection.BeginTransaction();
+            try
+            {
+                // 1. 停用当前无人机的所有任务分配
+                var deactivateSql = "UPDATE DroneSubTasks SET IsActive = 0 WHERE DroneId = @DroneId";
+                using var deactivateCmd = new SqlCommand(deactivateSql, connection, transaction);
+                deactivateCmd.CommandTimeout = 15;
+                deactivateCmd.Parameters.AddWithValue("@DroneId", drone.Id);
+                await deactivateCmd.ExecuteNonQueryAsync();
+
+                // 2. 批量添加新的任务分配
+                if (subTasks != null && subTasks.Any())
+                {
+                    var insertSql = @"
+                        INSERT INTO DroneSubTasks (DroneId, SubTaskId, AssignmentTime, IsActive)
+                        VALUES (@DroneId, @SubTaskId, @AssignmentTime, 1)";
+
+                    foreach (var subTask in subTasks)
+                    {
+                        using var insertCmd = new SqlCommand(insertSql, connection, transaction);
+                        insertCmd.CommandTimeout = 15;
+                        insertCmd.Parameters.AddRange(new[]
+                        {
+                            new SqlParameter("@DroneId", drone.Id),
+                            new SqlParameter("@SubTaskId", subTask.Id),
+                            new SqlParameter("@AssignmentTime", DateTime.Now)
+                        });
+                        await insertCmd.ExecuteNonQueryAsync();
+
+                        _logger.LogDebug("已为无人机 {DroneName} 分配子任务 {SubTaskId}", drone.Name, subTask.Id);
+                    }
+                }
+
+                await transaction.CommitAsync();
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                _logger.LogError(ex, "同步无人机子任务关联失败: DroneId={DroneId}, Error={Message}", drone.Id, ex.Message);
+                throw;
             }
         }
 
@@ -521,6 +588,19 @@ namespace WebApplication_Drone.Services
 
         public async Task<Guid> AddSubTaskAsync(SubTask subTask)
         {
+            // 首先检查是否已存在相同描述的子任务
+            var existingSubTask = await GetSubTaskByDescriptionAsync(subTask.ParentTask, subTask.Description);
+            if (existingSubTask != null)
+            {
+                _logger.LogWarning("子任务已存在，将更新现有子任务: ParentTask={ParentTask}, Description={Description}", 
+                    subTask.ParentTask, subTask.Description);
+                
+                // 更新现有子任务的状态
+                await UpdateSubTaskAsync(existingSubTask);
+                return existingSubTask.Id;
+            }
+
+            // 如果不存在，则创建新的子任务
             subTask.Id = Guid.NewGuid();
             var sql = @"
             INSERT INTO SubTasks (Id, Description, Status, CreationTime, AssignedTime, CompletedTime, ParentTask, ReassignmentCount)
@@ -876,34 +956,67 @@ namespace WebApplication_Drone.Services
         public async Task RecordDroneStatusFromDroneAsync(Drone drone)
         {
             using var connection = await CreateConnectionAsync();
-            using var transaction = connection.BeginTransaction();
+            using var transaction = connection.BeginTransaction(IsolationLevel.ReadCommitted);
             
             try
             {
-                var sql = @"
-                INSERT INTO DroneStatusHistory (DroneId, Status, Timestamp, CpuUsage, BandwidthAvailable, MemoryUsage, Latitude, Longitude)
-                VALUES (@DroneId, @Status, @Timestamp, @CpuUsage, @BandwidthAvailable, @MemoryUsage, @Latitude, @Longitude)";
+                // 1. 先执行MERGE操作确保无人机记录存在
+                var mergeSql = @"
+                    MERGE Drones AS target
+                    USING (SELECT @id AS Id, @name AS Name, @modelStatus AS ModelStatus, @modelType AS ModelType, @now AS LastHeartbeat) AS source
+                    ON target.Id = source.Id
+                    WHEN MATCHED THEN
+                        UPDATE SET 
+                            Name = source.Name,
+                            ModelStatus = source.ModelStatus,
+                            ModelType = source.ModelType,
+                            LastHeartbeat = source.LastHeartbeat
+                    WHEN NOT MATCHED THEN
+                        INSERT (Id, Name, ModelStatus, ModelType, RegistrationDate, LastHeartbeat)
+                        VALUES (source.Id, source.Name, source.ModelStatus, source.ModelType, @registrationDate, source.LastHeartbeat);";
 
-                using var cmd = new SqlCommand(sql, connection, transaction);
-                cmd.Parameters.AddRange(new[]
+                using (var mergeCmd = new SqlCommand(mergeSql, connection, transaction))
                 {
-                    new SqlParameter("@DroneId", drone.Id),
-                    new SqlParameter("@Status", (int)drone.Status),
-                    new SqlParameter("@Timestamp", DateTime.Now),
-                    new SqlParameter("@CpuUsage", ClampDecimal(drone.cpu_used_rate, 0m, 999.99m)),
-                    new SqlParameter("@BandwidthAvailable", ClampDecimal(drone.left_bandwidth, 0m, 9999.99m)),
-                    new SqlParameter("@MemoryUsage", ClampDecimal(drone.memory, 0m, 9999.99m)),
-                    new SqlParameter("@Latitude", ClampGpsCoordinate(drone.CurrentPosition?.Latitude_x)),
-                    new SqlParameter("@Longitude", ClampGpsCoordinate(drone.CurrentPosition?.Longitude_y))
-                });
-                
-                await cmd.ExecuteNonQueryAsync();
+                    mergeCmd.Parameters.AddRange(new[]
+                    {
+                        new SqlParameter("@id", drone.Id),
+                        new SqlParameter("@name", drone.Name ?? string.Empty),
+                        new SqlParameter("@modelStatus", (int)drone.ModelStatus),
+                        new SqlParameter("@modelType", drone.ModelType ?? string.Empty),
+                        new SqlParameter("@registrationDate", DateTime.Now),
+                        new SqlParameter("@now", DateTime.Now)
+                    });
+                    await mergeCmd.ExecuteNonQueryAsync();
+                }
+
+                // 2. 然后记录状态
+                var statusSql = @"
+                    INSERT INTO DroneStatusHistory (DroneId, Status, Timestamp, CpuUsage, BandwidthAvailable, MemoryUsage, Latitude, Longitude)
+                    VALUES (@DroneId, @Status, @Timestamp, @CpuUsage, @BandwidthAvailable, @MemoryUsage, @Latitude, @Longitude)";
+
+                using (var statusCmd = new SqlCommand(statusSql, connection, transaction))
+                {
+                    statusCmd.Parameters.AddRange(new[]
+                    {
+                        new SqlParameter("@DroneId", drone.Id),
+                        new SqlParameter("@Status", (int)drone.Status),
+                        new SqlParameter("@Timestamp", DateTime.Now),
+                        new SqlParameter("@CpuUsage", ClampDecimal(drone.cpu_used_rate, 0m, 999.99m)),
+                        new SqlParameter("@BandwidthAvailable", ClampDecimal(drone.left_bandwidth, 0m, 9999.99m)),
+                        new SqlParameter("@MemoryUsage", ClampDecimal(drone.memory, 0m, 9999.99m)),
+                        new SqlParameter("@Latitude", ClampGpsCoordinate(drone.CurrentPosition?.Latitude_x)),
+                        new SqlParameter("@Longitude", ClampGpsCoordinate(drone.CurrentPosition?.Longitude_y))
+                    });
+                    await statusCmd.ExecuteNonQueryAsync();
+                }
+
                 await transaction.CommitAsync();
+                _logger.LogDebug("成功记录无人机 {DroneId} ({DroneName}) 的状态", drone.Id, drone.Name);
             }
             catch (Exception ex)
             {
+                _logger.LogError(ex, "记录无人机 {DroneId} ({DroneName}) 状态时发生错误", drone.Id, drone.Name);
                 await transaction.RollbackAsync();
-                _logger.LogError(ex, "Error recording drone status for {DroneId}", drone.Id);
                 throw;
             }
         }

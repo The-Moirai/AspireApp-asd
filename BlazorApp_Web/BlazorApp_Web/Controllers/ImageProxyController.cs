@@ -9,9 +9,9 @@ namespace BlazorApp_Web.Controllers
         private readonly HttpClient _httpClient;
         private readonly ILogger<ImageProxyController> _logger;
 
-        public ImageProxyController(HttpClient httpClient, ILogger<ImageProxyController> logger)
+        public ImageProxyController(IHttpClientFactory httpClientFactory, ILogger<ImageProxyController> logger)
         {
-            _httpClient = httpClient;
+            _httpClient = httpClientFactory.CreateClient("ApiService");
             _logger = logger;
         }
 
@@ -190,7 +190,7 @@ namespace BlazorApp_Web.Controllers
                 
                 _logger.LogDebug("成功代理图片列表: SubTaskId={SubTaskId}", subTaskId);
 
-                return Content(content, "application/json");
+                return Content(content, "application/json; charset=utf-8");
             }
             catch (HttpRequestException ex)
             {

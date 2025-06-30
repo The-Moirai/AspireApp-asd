@@ -35,11 +35,11 @@ namespace ClassLibrary_Core.Drone
         /// <summary>
         /// 半径
         /// </summary>
-        public double radius { get; set; } = 500;
+        public double radius { get; set; } =1000;
         /// <summary>
         /// 带宽
         /// </summary>
-        public double left_bandwidth { get; set; } = 1000;
+        public double left_bandwidth { get; set; } = 500;
         /// <summary>
         /// 内存
         /// </summary>

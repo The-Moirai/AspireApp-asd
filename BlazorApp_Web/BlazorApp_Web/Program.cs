@@ -4,6 +4,7 @@ using BlazorApp_Web.Components;
 using BlazorApp_Web.Service;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -26,6 +27,8 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents()
     .AddInteractiveWebAssemblyComponents();
 
+builder.Services.AddHttpContextAccessor();
+
 // 配置API服务的HttpClient（使用Aspire服务发现和弹性处理）
 builder.Services.AddHttpClient("ApiService", client =>
 {
@@ -33,7 +36,7 @@ builder.Services.AddHttpClient("ApiService", client =>
     if (builder.Environment.IsDevelopment())
     {
         // 优先使用Aspire服务发现，如果不可用则fallback到localhost
-        client.BaseAddress = new Uri("https://localhost:7001/"); // API服务的开发环境地址
+        client.BaseAddress = new Uri("https://apisercie-drone/"); // API服务的开发环境地址
     }
     else
     {
@@ -73,17 +76,8 @@ builder.Services.AddHttpClient<ImageProxyService>(client =>
 // 为代理控制器配置专门的HttpClient
 builder.Services.AddHttpClient<BlazorApp_Web.Controllers.ImageProxyController>("ImageProxyClient", client =>
 {
-    if (builder.Environment.IsDevelopment())
-    {
-        client.BaseAddress = new Uri("https://localhost:7001/");
-    }
-    else
-    {
-        client.BaseAddress = new Uri("https://apisercie-drone/");
-    }
-    
+    client.BaseAddress = new Uri("https://apisercie-drone/");
     client.Timeout = TimeSpan.FromSeconds(60); // 图片可能较大，设置更长超时
-    
     // 配置图片请求的专门头信息
     client.DefaultRequestHeaders.Add("Accept", "image/*,application/json");
     client.DefaultRequestHeaders.Add("User-Agent", "BlazorApp-ImageProxy/1.0");
